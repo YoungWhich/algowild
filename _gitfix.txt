@@ -1,0 +1,2 @@
+﻿
+rm '_setup_log.txt'
