@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>涌现之地 · Emergent Lands</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0e1116;color:#dde2eb;overflow:hidden}
+  #app{display:flex;height:100%;min-height:0;overflow:hidden}
+  .panel{padding:12px;background:#161b22;border:1px solid #30363d;border-radius:6px}
+  #sidebar{width:280px;display:flex;flex-direction:column;gap:10px;padding:10px;overflow:auto}
+  #main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+  /* 关键：画布必须**绝对定位**。否则 canvas 的固有尺寸（width/height 属性）会参与 flex 布局，
+     和"每帧按容器尺寸写回 cv.width/height"形成反馈环 → 全屏/大屏时容器被越撑越大、地图错位+大片黑。 */
+  #canvas-wrap{flex:1;position:relative;background:#0a0d12;min-width:0;min-height:0;overflow:hidden}
+  canvas{display:block;position:absolute;left:0;top:0;width:100%;height:100%}
+  #hud{position:absolute;top:8px;left:8px;font-size:12px;color:#aab;padding:6px 10px;background:rgba(0,0,0,.4);border-radius:4px}
+  #score-hud{position:absolute;top:8px;right:8px;font-size:12px;color:#e6edf3;padding:8px 12px;background:rgba(0,0,0,.55);border:1px solid #30363d;border-radius:6px;text-align:right;line-height:1.7;min-width:150px}
+  #score-hud .big{font-size:20px;font-weight:600;color:#ffd479;display:block;line-height:1.2}
+  #score-hud .dim{color:#8b949e;font-size:11px}
+  #go-hud{position:absolute;top:0;left:0;right:0;font-size:13px;color:#e6edf3;padding:8px 14px;background:linear-gradient(rgba(0,0,0,.72),rgba(0,0,0,0));display:flex;gap:18px;align-items:center;pointer-events:none}
+  #go-hud .go-title{font-weight:600;color:#ffd479}
+  #go-hud b{color:#fff}
+  #go-hud .go-turn{border:1px solid #30363d;border-radius:4px;padding:2px 8px;background:rgba(31,111,235,.18)}
+  #go-hud .go-actions{position:absolute;top:44px;left:14px;display:flex;gap:6px;pointer-events:auto}
+  #go-hud button{font-size:12px;padding:4px 10px;display:inline-flex;align-items:center;gap:5px}
+  #go-hud button .key{font-size:10px;line-height:1;padding:1px 4px;border:1px solid rgba(255,255,255,.35);border-radius:4px;color:#cdd9e5;background:rgba(255,255,255,.08);font-family:ui-monospace,monospace}
+  #go-hud button.on{background:rgba(56,201,240,.22);border-color:#38c9f0;color:#aef0ff}
+  #go-hud button#go-vprev,#go-hud button#go-vprev-minus,#go-hud button#go-vprev-plus{padding:4px 8px}
+  #go-res{position:absolute;top:44px;right:14px;font-size:12px;background:rgba(0,0,0,.6);border:1px solid #30363d;border-radius:6px;padding:8px 12px;line-height:1.7;display:none;min-width:170px}
+  #go-res .dim{color:#8b949e;font-size:11px}
+  #hud b{color:#fff}
+  .row{display:flex;gap:6px;align-items:center}
+  input,button,select{background:#0d1117;color:#e6edf3;border:1px solid #30363d;padding:6px 10px;border-radius:4px;font:inherit;cursor:pointer}
+  input{flex:1;cursor:text}
+  button:hover{background:#21262d}
+  button.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+  button.primary:hover{background:#388bfd}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .stat{display:flex;justify-content:space-between;font-size:12px;color:#8b949e;padding:2px 0}
+  .stat b{color:#e6edf3}
+  .err{color:#ff7b72}
+  .ok{color:#3fb950}
+  .tabs{display:flex;gap:4px;margin-bottom:6px}
+  .tabs button{flex:1;font-size:11px;padding:4px 6px}
+  .tabs button.active{background:#21262d;border-color:#58a6ff;color:#fff}
+  .emergent{font-size:11px;color:#8b949e;padding:2px 0;border-top:1px solid #21262d}
+  .emergent b{color:#d2a8ff}
+  .modal{position:absolute;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:10}
+  .modal-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;width:340px;max-width:92vw;max-height:86vh;overflow-y:auto}
+  .modal h2{font-size:18px;margin-bottom:12px;color:#fff}
+  .modal .row{margin-bottom:8px}
+  #toast{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.6);padding:8px 12px;border-radius:4px;font-size:12px;opacity:0;transition:opacity .2s;z-index:5}
+  #toast.show{opacity:1}
+  #chatbox{position:absolute;bottom:8px;left:8px;right:8px;display:flex;gap:6px}
+  #chatbox input{background:rgba(0,0,0,.5)}
+  .kbd{display:inline-block;padding:1px 6px;border:1px solid #30363d;border-radius:3px;font-size:10px;color:#8b949e;background:#0d1117}
+  .help{font-size:11px;color:#8b949e;line-height:1.6}
+  .help kbd{font-family:ui-monospace,Consolas,monospace}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="panel">
+      <div style="font-size:14px;color:#fff;font-weight:600;margin-bottom:4px">涌现之地</div>
+      <div style="font-size:11px;color:#8b949e">v4.0 · 46 算法 · 14 涌现单位</div>
+    </div>
+    <div id="auth-panel" class="panel">
+      <div class="tabs">
+        <button id="tab-login" class="active">登录</button>
+        <button id="tab-reg">注册</button>
+      </div>
+      <div class="row"><input id="auth-u" placeholder="用户名" maxlength="32"></div>
+      <div class="row"><input id="auth-p" type="password" placeholder="密码(6-64)" maxlength="64"></div>
+      <div class="row"><button id="auth-go" class="primary" style="flex:1">进入</button></div>
+      <div id="auth-msg" style="font-size:11px;min-height:14px;margin-top:4px"></div>
+    </div>
+    <div id="user-panel" class="panel" style="display:none">
+      <div class="stat"><span>用户</span><b id="me-name"></b></div>
+      <div class="stat"><span>ID</span><b id="me-id"></b></div>
+      <div class="row" style="margin-top:8px"><button id="logout" style="flex:1">登出</button></div>
+      <div class="row" id="admin-entry" style="display:none;margin-top:6px">
+        <a href="/admin.html" target="_blank" rel="noopener" style="flex:1;text-align:center;text-decoration:none;background:#1f6feb;border:1px solid #1f6feb;color:#fff;padding:6px 10px;border-radius:4px;font-size:13px">管理后台 ↗</a>
+      </div>
+    </div>
+    <div id="world-panel" class="panel" style="display:none">
+      <div style="font-size:13px;color:#fff;margin-bottom:6px">房间大厅</div>
+      <div class="row"><input id="room-name" placeholder="房间名(可空)" maxlength="32"></div>
+      <div class="row">
+        <select id="world-mode" title="模式" style="flex:1">
+          <option value="rts">实时模式</option>
+          <option value="go">回合制模式</option>
+        </select>
+        <select id="room-max" title="席位数(含电脑)" style="flex:0 0 86px">
+          <option value="1">1 人</option>
+          <option value="2">2 人</option>
+          <option value="3">3 人</option>
+          <option value="4" selected>4 人</option>
+          <option value="5">5 人</option>
+          <option value="6">6 人</option>
+          <option value="7">7 人</option>
+          <option value="8">8 人</option>
+        </select>
+      </div>
+      <div class="row">
+        <select id="room-vis" title="可见性" style="flex:1">
+          <option value="public">公开（进大厅列表）</option>
+          <option value="private">私密（需密码）</option>
+        </select>
+      </div>
+      <div class="row" id="room-pass-row" style="display:none">
+        <input id="room-pass" type="password" placeholder="房间密码(6-64)" maxlength="64">
+      </div>
+      <div class="row" title="房主可设：每回合最多落几颗子（1~16，默认 3）">
+        <input id="room-stones" type="number" min="1" max="16" step="1" placeholder="落子数/回合(默认3)" style="flex:1">
+        <input id="room-delay" type="number" min="0" max="10" step="1" placeholder="死亡宽限(默认0)" style="flex:0 0 116px" title="单颗/2 颗相邻等无法存活单位宽限几回合才死（0~10，默认 0）">
+      </div>
+      <div class="row"><button id="create-room" class="primary" style="flex:1">建房</button></div>
+      <div class="row" style="margin-top:6px">
+        <button id="quick-room" style="flex:1;background:#238636;border-color:#238636;color:#fff">单人开局（1 人 + 3 电脑）</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <input id="room-search" placeholder="输入房间号搜索" style="flex:1" maxlength="12">
+        <button id="room-search-btn">搜索</button>
+      </div>
+      <div id="room-msg" style="font-size:11px;min-height:14px;margin-top:4px"></div>
+      <div id="room-list-label" style="font-size:11px;color:#8b949e;margin-top:8px">
+        公开房间 <span id="room-list-refresh" style="cursor:pointer;color:#58a6ff">↻ 刷新</span>
+      </div>
+      <div id="room-list" style="font-size:11px;max-height:180px;overflow:auto">加载中…</div>
+      <div id="go-rules" class="row" style="margin-top:6px;display:none">
+        <button id="go-help-btn" style="flex:1">? 规则速查</button>
+      </div>
+      <div id="world-msg" style="font-size:10px;color:#6e7681;margin-top:4px"></div>
+    </div>
+    <div id="room-panel" class="panel" style="display:none">
+      <div class="stat"><span>房间码</span><b id="room-code">-</b></div>
+      <div class="stat"><span>状态</span><b id="room-phase">-</b></div>
+      <div class="stat" id="room-count-row"><span>席位</span><b id="room-count">0/0</b></div>
+      <div class="stat" id="room-slots-row"><span>人类/电脑</span><b id="room-slots">0H + 0AI</b></div>
+      <div class="stat" id="room-tick-row"><span>tick</span><b id="room-tick">0</b></div>
+      <div class="stat" id="tide-row"><span>潮汐</span><b id="tide-info">-</b></div>
+      <div class="stat" id="emergent-row"><span>涌现数</span><b id="room-emergent">0</b></div>
+      <div class="stat" id="room-lat-row"><span>机制</span><b id="room-lat">惯性</b></div>
+      <div class="stat" id="room-settings-row"><span>玩法设置</span><b id="room-settings-info" style="color:#ffd479">落子 3 颗/回合 · 死亡宽限 0 回合</b></div>
+      <div class="row" id="lobby-build-row" style="margin-top:6px;display:none">
+        <button id="lobby-build" class="primary" style="flex:1">建立世界（房主）</button>
+      </div>
+      <div class="row" id="lobby-start-row" style="margin-top:6px;display:none">
+        <button id="lobby-start" class="primary" style="flex:1">开始游戏（房主）</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button id="lobby-add-ai" style="flex:1">+ 电脑玩家</button>
+        <button id="lobby-remove-ai" style="flex:1">− 电脑玩家</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button id="lobby-pause" style="flex:1">暂停(房主)</button>
+        <button id="lobby-save" style="flex:1">存档</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button id="copy-invite" style="flex:1;background:#1f6feb;border-color:#1f6feb;color:#fff">复制邀请链接</button>
+        <button id="lobby-leave" style="flex:1">离开</button>
+      </div>
+      <div id="seat-label" style="font-size:11px;color:#8b949e;margin-top:8px">席位（人类 / 电脑代打）</div>
+      <div id="seat-list" style="font-size:11px"></div>
+      <div class="row" style="margin-top:6px">
+        <button id="briefing-btn" style="flex:1">📜 任务简报</button>
+      </div>
+      <div id="stock-label" style="font-size:11px;color:#8b949e;margin-top:8px">个人资源（6 类各攒到 30 = 奇点胜）</div>
+      <div id="stock-list" style="font-size:11px"></div>
+      <div id="score-board-label" style="font-size:11px;color:#8b949e;margin-top:8px">领土榜 · 谁先占满 16 区</div>
+      <div id="score-board" style="font-size:11px"></div>
+      <div id="win-list-label" style="font-size:11px;color:#8b949e;margin-top:8px">胜利条件进度</div>
+      <div id="win-list" style="font-size:11px"></div>
+      <div id="res-list-label" style="font-size:11px;color:#8b949e;margin-top:8px">资源</div>
+      <div id="res-list" style="font-size:11px"></div>
+      <div id="emergent-list-label" style="font-size:11px;color:#8b949e;margin-top:8px">已涌现</div>
+      <div id="emergent-list" style="font-size:11px;max-height:140px;overflow:auto"></div>
+    </div>
+    <div class="panel help" id="rts-help">
+      <b>30 秒看懂怎么玩：</b><br>
+      1. <b>目标</b>：占领地盘。你的细胞会自动生长、自动攻击附近的敌人；后期占满 16 个区域即获胜。<br>
+      2. <b>操作</b>：<kbd>WASD</kbd> 移动（走过留下细胞痕迹）· <kbd>F</kbd> 种强细胞（约 30 秒后解锁）· <kbd>Shift</kbd> 冲刺 · 靠近敌人自动开火 · 踩到资源自动收集<br>
+      3. <b>落子怎么才稳</b>：<b>单独 1 颗、或只挨着 1 颗的细胞会消失</b>；要 <b>≥3 颗连成一片（直线三连 / L 形）或 2×2 方块</b>才稳。所以落子要成片、成块。<br>
+      4. <b>演化</b>：随时间推进，你会从单细胞逐步解锁更强能力（更快、种子更多、开放领土胜利）。<br>
+      <kbd>?</kbd> 看本面板 · 右侧领土榜实时显示 4 方进度
+    </div>
+  </aside>
+  <main id="main">
+    <div id="canvas-wrap">
+      <canvas id="cv"></canvas>
+      <div id="go-hud" style="display:none"></div>
+      <div id="hud">载入中…</div>
+      <div id="score-hud"></div>
+      <div id="toast"></div>
+      <div id="go-res"></div>
+      <div id="chatbox" style="display:none">
+        <input id="chat-input" placeholder="聊天..." maxlength="200">
+        <button id="chat-send">发送</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div id="modal" class="modal" style="display:none">
+  <div class="modal-card">
+    <h2 id="modal-title">提示</h2>
+    <div id="modal-body" style="margin-bottom:12px"></div>
+    <div class="row"><button id="modal-ok" class="primary" style="flex:1">确定</button></div>
+  </div>
+</div>
+
+<script type="module" src="./client.js?v=20260912l"></script>
+</body>
+</html>

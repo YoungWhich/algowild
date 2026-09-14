@@ -1,0 +1,32 @@
+# 依赖与构建产物
+node_modules/
+
+# 运行时数据库（每次启动由平台重建，不入库）
+server/data/
+
+# WorkBuddy 项目记忆 / agent 数据
+.workbuddy/
+
+# 日志
+*.log
+
+# 本会话产生的临时探针 / 调试文件（非源码）
+probe*.txt
+probe*.mjs
+run_*.txt
+run_*.err
+run_*.log
+run_out*.txt
+run_err*.txt
+server_run.*
+scan*.mjs
+scan*.txt
+start_and_probe.mjs
+start_status.txt
+summary.txt
+test_out*.txt
+test_output*.txt
+verify_*.mjs
+verify_*.txt
+_p_go.txt
+_ls_*.txt

@@ -1,0 +1,26 @@
+# Render 一键部署配置（可选）
+# 用法：在 Render 新建 "Blueprint" 服务，连上本仓库，选这个文件即可。
+# 也可以不走这个文件、直接在 Dashboard 手动填（见 docs/deploy-render-b.md）。
+#
+# 注意：MASTER_USERNAME / MASTER_PASSWORD / ADMIN_* 等含密钥的变量
+# 不要写进本文件（会被提交到 Git）。请在 Render Dashboard → Environment 里手动填。
+services:
+  - type: web
+    name: algowild
+    runtime: node
+    plan: free
+    region: singapore        # 离国内最近；也可选 oregon / frankfurt
+    branch: main             # 改成你实际推送的分支名
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"          # 必须 22+（package.json engines 要求 >=22.5.0）
+      # 以下请在 Dashboard 里手动添加（sync:false 表示值取自后台，不写死在此文件）：
+      - key: MASTER_USERNAME
+        sync: false
+      - key: MASTER_PASSWORD
+        sync: false
+      - key: ADMIN_ACCESS_KEY
+        sync: false

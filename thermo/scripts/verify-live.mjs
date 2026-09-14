@@ -1,0 +1,11 @@
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { chromium } = require('C:/Users/JM/.workbuddy/binaries/node/workspace/node_modules/playwright-core');
+const b = await chromium.launch({ executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true });
+const p = await (await b.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, locale: 'zh-CN' })).newPage();
+const errs = []; p.on('pageerror', e => errs.push(e.message));
+await p.goto('https://20d869d4ea284a2e8fe09785fd1094db.app.workbuddy.link', { waitUntil: 'networkidle', timeout: 30000 });
+await p.waitForTimeout(1200);
+await p.screenshot({ path: 'shots/08-live.png' });
+console.log('live ok', errs.length ? errs.join('; ') : '(no js errors)');
+await b.close();

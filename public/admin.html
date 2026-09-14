@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>涌现之地 · 管理后台</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0e1116;color:#dde2eb}
+  body{display:flex;flex-direction:column;min-height:100vh}
+  header{display:flex;align-items:center;gap:14px;padding:12px 18px;background:#161b22;border-bottom:1px solid #30363d;position:sticky;top:0;z-index:20}
+  header .brand{font-size:15px;font-weight:600;color:#fff}
+  header .brand span{color:#8b949e;font-weight:400;font-size:12px;margin-left:6px}
+  header .spacer{flex:1}
+  header .who{font-size:12px;color:#8b949e}
+  header .who b{color:#3fb950}
+  a.link{color:#58a6ff;text-decoration:none}
+  a.link:hover{text-decoration:underline}
+  #tabs{display:flex;gap:6px;padding:10px 18px;flex-wrap:wrap;background:#0e1116;border-bottom:1px solid #21262d}
+  #tabs button{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;padding:6px 14px;border-radius:6px;font:inherit;cursor:pointer;font-size:13px}
+  #tabs button:hover{background:#21262d}
+  #tabs button.active{background:#1f6feb;border-color:#1f6feb;color:#fff}
+  main{flex:1;padding:18px;max-width:1200px;width:100%;margin:0 auto}
+  .section{display:none}
+  .section.active{display:block}
+  .panel{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px;margin-bottom:14px}
+  h2{font-size:15px;color:#fff;margin-bottom:10px}
+  h3{font-size:13px;color:#c9d1d9;margin:10px 0 6px}
+  .cards{display:flex;gap:12px;flex-wrap:wrap}
+  .card{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px 16px;min-width:130px}
+  .card .v{font-size:22px;font-weight:600;color:#ffd479}
+  .card .k{font-size:11px;color:#8b949e;margin-top:2px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #21262d;vertical-align:middle}
+  th{color:#8b949e;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  tr:hover td{background:#1b2129}
+  input,select,button{background:#0d1117;color:#e6edf3;border:1px solid #30363d;padding:6px 10px;border-radius:5px;font:inherit;font-size:13px}
+  input{cursor:text}
+  button{cursor:pointer}
+  button:hover{background:#21262d}
+  button.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+  button.primary:hover{background:#388bfd}
+  button.danger{background:#f85149;border-color:#f85149;color:#fff}
+  button.danger:hover{background:#ff6a60}
+  button.warn{border-color:#ffd479;color:#ffd479}
+  button.ghost{font-size:12px;padding:3px 9px}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .muted{color:#8b949e}
+  .ok{color:#3fb950}
+  .err{color:#f85149}
+  .warn-c{color:#ffd479}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;border:1px solid #30363d}
+  .tag.admin{color:#ffd479;border-color:#6b5320;background:#2a2410}
+  .tag.player{color:#8b949e}
+  .tag.banned{color:#f85149;border-color:#5c2a28;background:#2a1414}
+  .tag.normal{color:#3fb950;border-color:#1f4a26;background:#102414}
+  .center{padding:60px 20px;text-align:center}
+  .center h1{font-size:20px;color:#fff;margin-bottom:10px}
+  #toast{position:fixed;top:16px;right:16px;background:#161b22;border:1px solid #30363d;border-left:4px solid #3fb950;padding:10px 16px;border-radius:6px;font-size:13px;opacity:0;transform:translateY(-8px);transition:.2s;z-index:100;max-width:360px}
+  #toast.show{opacity:1;transform:none}
+  #toast.error{border-left-color:#f85149}
+  #toast.warn{border-left-color:#ffd479}
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:50}
+  .overlay.show{display:flex}
+  .dialog{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;width:380px;max-width:92vw}
+  .dialog h3{font-size:16px;color:#fff;margin:0 0 12px}
+  .dialog .field{margin-bottom:10px}
+  .dialog label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px}
+  .dialog input,.dialog select{width:100%}
+  .dialog .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+  .pager{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:10px;font-size:12px;color:#8b949e}
+  .empty{color:#8b949e;padding:14px 0;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">涌现之地 · 管理后台<span>Admin Console</span></div>
+  <div class="spacer"></div>
+  <div class="who" id="who"></div>
+  <a class="link" href="/" style="font-size:12px">← 返回游戏</a>
+</header>
+
+<div id="tabs" style="display:none">
+  <button data-tab="overview" class="active">总览</button>
+  <button data-tab="users">玩家管理</button>
+  <button data-tab="online">在线</button>
+  <button data-tab="rooms">房间</button>
+  <button data-tab="actions">审计日志</button>
+  <button data-tab="maintenance">维护</button>
+</div>
+
+<main>
+  <!-- 无鉴权 / 无权限 占位 -->
+  <div id="gate" class="center">
+    <h1 id="gate-title">正在校验权限…</h1>
+    <div id="gate-body" class="muted"></div>
+  </div>
+
+  <div id="content" style="display:none">
+    <!-- 总览 -->
+    <div class="section active" data-sec="overview">
+      <div class="panel">
+        <div class="row" style="justify-content:space-between">
+          <h2>系统总览</h2>
+          <button class="ghost" id="overview-refresh">↻ 刷新</button>
+        </div>
+        <div class="cards" id="overview-cards"></div>
+      </div>
+    </div>
+
+    <!-- 玩家管理 -->
+    <div class="section" data-sec="users">
+      <div class="panel">
+        <h2>玩家管理</h2>
+        <div class="row" style="margin-bottom:10px">
+          <input id="u-q" placeholder="搜索用户名 / ID" style="min-width:200px" />
+          <select id="u-filter">
+            <option value="all">全部</option>
+            <option value="banned">已封禁</option>
+            <option value="admin">管理员</option>
+          </select>
+          <select id="u-pageSize">
+            <option value="10">10 / 页</option>
+            <option value="20" selected>20 / 页</option>
+            <option value="50">50 / 页</option>
+          </select>
+          <button class="primary" id="u-search">搜索</button>
+        </div>
+        <div id="u-table-wrap"></div>
+        <div class="pager">
+          <span id="u-total"></span>
+          <button class="ghost" id="u-prev">上一页</button>
+          <span id="u-page"></span>
+          <button class="ghost" id="u-next">下一页</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 在线 -->
+    <div class="section" data-sec="online">
+      <div class="panel">
+        <div class="row" style="justify-content:space-between">
+          <h2>在线玩家</h2>
+          <button class="ghost" id="online-refresh">↻ 刷新</button>
+        </div>
+        <div id="online-wrap"></div>
+      </div>
+    </div>
+
+    <!-- 房间 -->
+    <div class="section" data-sec="rooms">
+      <div class="panel">
+        <div class="row" style="justify-content:space-between">
+          <h2>房间列表（含私密房）</h2>
+          <button class="ghost" id="rooms-refresh">↻ 刷新</button>
+        </div>
+        <div id="rooms-wrap"></div>
+      </div>
+    </div>
+
+    <!-- 审计日志 -->
+    <div class="section" data-sec="actions">
+      <div class="panel">
+        <div class="row" style="justify-content:space-between">
+          <h2>审计日志（倒序）</h2>
+          <button class="ghost" id="actions-refresh">↻ 刷新</button>
+        </div>
+        <div id="actions-wrap"></div>
+      </div>
+    </div>
+
+    <!-- 维护 -->
+    <div class="section" data-sec="maintenance">
+      <div class="panel">
+        <div class="row" style="justify-content:space-between">
+          <h2>不活跃账号清理</h2>
+          <button class="ghost" id="m-refresh">↻ 刷新</button>
+        </div>
+        <p class="muted" style="font-size:12px;margin-bottom:10px">
+          按「最近登录时间」判定（从未登录按注册时间）。<b>0 = 关闭自动清理</b>。后台每 6 小时自动执行一次；<b>管理员账号永不被清理</b>。
+        </p>
+        <div class="row">
+          <label class="muted" style="font-size:12px">不活跃阈值（天）</label>
+          <input id="m-days" type="number" min="0" max="3650" style="width:120px" />
+          <button class="primary" id="m-save">保存</button>
+          <button class="warn" id="m-purge">立即清理一次</button>
+        </div>
+        <div id="m-info" class="muted" style="font-size:12px;margin-top:10px"></div>
+        <h3>将被清理的账号（预演，最多列 50 条）</h3>
+        <div id="m-preview"></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- 通用确认 / 输入对话框 -->
+<div class="overlay" id="overlay">
+  <div class="dialog">
+    <h3 id="dlg-title">提示</h3>
+    <div id="dlg-fields"></div>
+    <div class="actions">
+      <button id="dlg-cancel">取消</button>
+      <button id="dlg-ok" class="primary">确定</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script type="module" src="./admin.js?v=20260912b"></script>
+</body>
+</html>

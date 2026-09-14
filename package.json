@@ -1,0 +1,34 @@
+{
+  "name": "algowild",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "算法荒野 - 以经典算法为内核的单机生存建造 + 实时联机",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test:kernels": "node --test --expose-gc tests/kernels.test.mjs",
+    "test:engine": "node --test --expose-gc tests/engine.test.mjs",
+    "test:api": "node --test --expose-gc tests/api.test.mjs",
+    "test:multi": "node --test --expose-gc tests/multiplayer.test.mjs",
+    "test": "node --test --expose-gc tests/kernels.test.mjs tests/engine.test.mjs tests/api.test.mjs tests/multiplayer.test.mjs tests/go_mode.test.mjs tests/life_cell_combat.test.mjs tests/rts_spacing.test.mjs tests/room_lobby.test.mjs tests/room_settings.test.mjs tests/admin.test.mjs tests/maintenance.test.mjs",
+    "test:smoke": "bash tests/smoke.sh",
+    "test:rooms": "node --test --expose-gc tests/room_lobby.test.mjs tests/room_settings.test.mjs tests/room_cap.test.mjs",
+    "test:admin": "node --test --expose-gc tests/admin.test.mjs",
+    "test:maint": "node --test --expose-gc tests/maintenance.test.mjs",
+    "test:go": "node --test --expose-gc tests/go_mode.test.mjs"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "sql.js": "^1.14.2",
+    "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.3.0"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
