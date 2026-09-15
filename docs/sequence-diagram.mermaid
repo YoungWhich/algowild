@@ -1,0 +1,63 @@
+sequenceDiagram
+  participant C as Client(public/client.js)
+  participant R as routes.js
+  participant RM as rooms.js
+  participant DB as db/index.js
+  participant W as World(engine.js)
+  participant GO as go.js
+
+  Note over C,GO: === 配置透传链（建房 → 判决 → 快照）===
+  C->>R: POST /api/rooms {mode,victoryLines,victoryThresholds}
+  R->>RM: createRoom({...,victoryLines,victoryThresholds})
+  RM->>RM: normVictoryLines(v,mode) / normVictoryThresholds(v)
+  RM->>DB: roomsRepo.create(...,JSON.stringify(...))
+  RM-->>R: room{victoryLines,victoryThresholds}
+  R-->>C: {room: roomInfo(room)}  (含 victoryLines/availableLines)
+
+  C->>R: POST /api/rooms/:code/world
+  R->>W: new World(id,owner,seed,{mode,...,victoryLines,victoryThresholds})
+  W->>W: _clampInt 双保险 → this.victoryLines / this.victoryThresholds
+  R-->>C: {worldId, room}
+
+  Note over W,GO: rts: tickOnce → _checkVictoryConditions 读 victoryLines.<line> 开关 + victoryThresholds
+  Note over W,GO: go : applyGoIntent → _goEndTurn → (passStreak>=seats) → _goFinish → _goScoreChinese
+
+  C->>R: GET /api/worlds/:id 或 WS hello
+  R->>W: snapshot()
+  W-->>C: settings{stonesPerTurn,lonelyDeathDelay,victoryLines,victoryThresholds,availableLines}
+
+  Note over H,GO: === 房主中途改配置 ===
+  participant H as Host(房主)
+  H->>R: PATCH /api/rooms/:code/settings {victoryLines,victoryThresholds}
+  R->>RM: getRoom(code)
+  R->>R: w.hostId !== req.user.id ? 403 not_host
+  R->>RM: normVictoryLines(v,w.mode) / normVictoryThresholds(v)
+  RM->>DB: roomsRepo.setSettings(code,{...})
+  RM->>W: w.victoryLines=...; w.victoryThresholds=...（内存权威覆盖）
+  R-->>H: {code:0, room: roomInfo(room)}
+  Note over C: 其他玩家下一次收到 snapshot → settings 生效
+
+  Note over P,F: === go 终局判定流程 ===
+  participant P as 玩家
+  participant F as _goFinish
+  P->>W: applyGoIntent(pass) / {moves}
+  W->>W: _goEndTurn(played)
+  W->>W: passStreak += 1 (pass) / =0 (落子)
+  alt passStreak >= seats.length
+    W->>F: _goFinish('pass')
+  else moveNo >= GO_MAX_MOVES(150)
+    W->>F: _goFinish('max_moves')
+  else 某方 lifeCells=0 且 maxLifeCells>=4
+    W->>F: _goFinish('wiped')  (仅触发终局，不宣告胜者)
+  else 只剩一方未出局
+    W->>F: _goFinish('last_standing')
+  else 超时/认输
+    W->>F: _goFinish('timeout'|'resign')
+  end
+  F->>GO: sc = _goScoreChinese()  (子数 + 围空)
+  alt victoryLines.territory 开
+    F->>F: winner = 唯一最高分，否则 null(平局，不贴子)
+  else 关
+    F->>F: winner = null (仅出明细)
+  end
+  F-->>P: 事件 go_end{winner,reason,ranked,blackScore,whiteScore}

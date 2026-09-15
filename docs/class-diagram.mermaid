@@ -1,0 +1,88 @@
+classDiagram
+  class World {
+    +mode: string
+    +victoryLines: VictoryLines
+    +victoryThresholds: VictoryThresholds
+    +stonesPerTurn: int
+    +lonelyDeathDelay: int
+    +static VICTORY_LINE_KEYS: string[]
+    +static VICTORY_LINE_DEFAULT: VictoryLines
+    +static VICTORY_AVAILABLE: object
+    +static VICTORY_THRESHOLD_SPEC: object
+    +static availableLines(mode) string[]
+    +static normVictoryLines(v, mode) VictoryLines
+    +static normVictoryThresholds(v) VictoryThresholds
+    +_checkVictoryConditions(events)
+    +snapshot(includeEntities) object
+  }
+  class VictoryLines {
+    +territory: boolean
+    +economy: boolean
+    +singularity: boolean
+    +survival: boolean
+  }
+  class VictoryThresholds {
+    +territoryRegions: int
+    +economyLead: int
+    +economyHoldTicks: int
+    +singularityThreshold: int
+    +deathLimit: int
+  }
+  class Room {
+    +code: string
+    +ownerId: int
+    +mode: string
+    +victoryLines: VictoryLines
+    +victoryThresholds: VictoryThresholds
+    +worldId: string
+  }
+  class GoMixins {
+    +_goScore() ScoreResult
+    +_goScoreChinese() ChineseScore
+    +_goEnclosedEmpty() object
+    +_goFinish(reason, events)
+    +_goEndTurn(played, events)
+    +_goSnapshotState() object
+    +applyGoIntent(playerId, data, events)
+  }
+  class ScoreResult {
+    +byF: object
+    +black: int
+    +white: int
+    +bonus: object
+    +ranked: RankRow[]
+  }
+  class ChineseScore {
+    +byF: object
+    +black: int
+    +white: int
+    +stoneByF: object
+    +emptyByF: object
+    +ranked: RankRow[]
+  }
+  class RankRow {
+    +playerId: int
+    +faction: int
+    +name: string
+    +score: int
+    +stones: int
+    +empty: int
+    +territory: int
+    +lost: boolean
+  }
+  class roomsRepo {
+    +create(code, worldId, ownerId, maxPlayers, opts)
+    +get(code)
+    +setSettings(code, s)
+  }
+  World --> VictoryLines
+  World --> VictoryThresholds
+  World ..> GoMixins : installGoMode(World)
+  GoMixins --> ScoreResult
+  GoMixins --> ChineseScore
+  ChineseScore --> RankRow
+  ScoreResult --> RankRow
+  Room --> VictoryLines
+  Room --> VictoryThresholds
+  Room ..> World : worldForRoom(norm opts)
+  roomsRepo ..> Room : create/hydrate
