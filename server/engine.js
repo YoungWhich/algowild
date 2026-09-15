@@ -1269,14 +1269,19 @@ export class World {
   // → era2 潮汐捕食者出现（TIDE_ERA）→ era3 领土胜开放。
   // 门槛以"存活时间"为主：era0→1 仅需 30s 存活（cells=0，避免无法落子卡死）；
   // era1→2/3 要求细胞与大区，由玩家主动演化达成。Ticks 为 20 TPS。
-  // 单局 30–45 分钟：18 分钟纯存活（21600 tick）才可能帝国+16 区。
-  // 大世界校准：单局目标 ~60 分钟。帝国纪 = 53 分钟存活门槛（早到 16 区也不许提前领土胜）；
-  // 城市纪 4.5min 即开放潮汐捕食，节奏由"演化的时间门"而非一次性冲刺决定。
+  // 单局时长校准（2026-02，用户反馈"太长谁都赢不了"）：
+  //   原 era3 empire = 64000 tick ≈ 53 分钟 → 长到双方都够不到胜利线、对局永不终结。
+  //   目标：一个**正常发育**的玩家 15–20 分钟内能升到 era3 并触碰领土/经济胜利线。
+  //   ticks 64000→24000（20 分钟）；cells 140→90、regions 8→6 相应下调，
+  //   使 era3 可在合理发育节奏内达成（保留"必须真正扩张/占地才能晋级"的设计意图）。
+  //   实测依据：ai capture 探针中 AI 在 3000 tick 内已达 lifeCells≈42 / regions≈18；
+  //   正常人类玩家 20 分钟内的 cell/region 上限远高于 90/6。
+  // era1 600 tick（30s）、era2 city 5400 tick（4.5min，开放潮汐捕食）保持不变。
   static ERAS = [
     { name: 'tribe',   ticks: 0,     cells: 0,   regions: 0, seedRadius: 0, resist: 1.0, maxV: 0.7,  influenceR: 1 },
     { name: 'village', ticks: 600,   cells: 0,   regions: 0, seedRadius: 0, resist: 1.5, maxV: 1.0,  influenceR: 2 },
     { name: 'city',    ticks: 5400,  cells: 60,  regions: 2, seedRadius: 1, resist: 2.0, maxV: 1.45, influenceR: 2 },
-    { name: 'empire',  ticks: 64000, cells: 140, regions: 8, seedRadius: 1, resist: 3.0, maxV: 1.9,  influenceR: 2 },
+    { name: 'empire',  ticks: 24000, cells: 90,  regions: 6, seedRadius: 1, resist: 3.0, maxV: 1.9,  influenceR: 2 },
   ];
   // 演化晋升时的随机变异池（确定性 RNG 掷出，每局演化出的"性状"不同）
   static MUTATIONS = [

@@ -5,7 +5,9 @@
 //   2) 然后持续殖民：选"与我方势力相邻的最近无主大区"，走到其中心，快照落 2x2。
 //      —— 大区 4x4 生命格，中心 2x2 在其 INFLUENCE_R(3) 覆盖内 → 直接翻转归属。
 //   3) 翻牌后换下一个大区（向四方扩张成"势力"）。
-//   4) 附近有人类/领先的对手 → 交战（守土/抢地）；敌对单位只在贴脸时才打（不被拖走）。
+//   4) 附近有人类/领先的对手 → **有脑子地**交战：只在"进攻期望收益为正"（对方残血/贴脸/
+//      可在合理时间内击杀）时才追猎，且追猎有 6s 时间上限；否则继续扩张（占地才是 AI 的胜利线）。
+//      —— 不做数值外挂（不改 PVP_DMG 等全局常量），只让决策更聪明：不把时间浪费在打不死的追猎上。
 // 确定性：不引入 Math.random，只在真引擎的 world._rng 序列上做整数运算。
 import { WORLD_W, WORLD_H, pickSpawn } from './util.js';
 
@@ -194,13 +196,16 @@ export function stepAI(world, intents) {
   for (const p of ps) {
     if (!isBot(p) || !p.alive) continue;
     p._aiThink = (p._aiThink || 0) + 1;
-    if (p._aiThink < 2) continue;          // ~10 Hz（原 3 → 反应更快）
+    // D) 决策频率：每 tick 都决策（原 `_aiThink < 2` → ~10Hz）。rts 实体数不多，20Hz 全量决策
+    //    性能可接受；更跟手（修复"回种期冻结/迟钝"）。确定性不受影响（全程无 Math.random，
+    //    模拟层只用 world._rng）。
+    if (p._aiThink < 1) continue;
     p._aiThink = 0;
     if (p._plantCd > 0) p._plantCd--;
 
     const f = world._factionOf(p.id);
 
-    // 0) 贴脸敌对（<4 格）→ 打/逃；远处敌对不理（潮汐不会把 AI 拖离领地）
+    // 0) 贴脸敌对实体（<4 格）→ 打/逃
     let threat = null, threatD = 4 * 4;
     for (const e of world.entities) {
       if (e.faction !== 'hostile' || e.hp <= 0) continue;
@@ -210,18 +215,32 @@ export function stepAI(world, intents) {
     if (threat) {
       const dx = threat.x - p.x, dy = threat.y - p.y;
       const l = Math.hypot(dx, dy) || 1;
-      if (p.hp < 22) { intents.push(p.id, { move: { dx: -dx / l, dy: -dy / l } }); continue; }
+      // 极端逃跑阈值：濒死(hp<15)必跑，保留原行为。
+      if (p.hp < 15) { intents.push(p.id, { move: { dx: -dx / l, dy: -dy / l } }); continue; }
+      // A3) 理智撤退：hp 偏低(<35%)且面前有敌对涌现单位 → 拉开距离，别在原地硬刚送死。
+      //     （涌现单位碰撞 18 伤害/次，低血贴脸极易被连击致死 → 累积 12 死出局。）
+      if (p.hp < 35) { intents.push(p.id, { move: { dx: -dx / l, dy: -dy / l } }); continue; }
       if (threatD < 2 * 2) intents.push(p.id, { attack: { tx: threat.x, ty: threat.y } });
       else intents.push(p.id, { move: { dx: dx / l, dy: dy / l } });
       continue;
     }
 
-    // 1) 站资源上 → 收集
+    // 1) 站资源格上 → 收集（保留原 hereRes 分支，不与其他逻辑冲突）
     const hereRes = world.resources[Math.floor(p.x)] && world.resources[Math.floor(p.x)][Math.floor(p.y)];
     if (hereRes) { intents.push(p.id, { build: 'gather' }); continue; }
 
-    // 2) 附近人类/对手 → 交战（提高难度：侦测半径 16→20，更主动来找你）
-    let enemy = null, ed = 20 * 20;
+    // 2) 附近人类/领先对手 → **有脑子地**决定打还是继续发育
+    //    ─────────────────────────────────────────────────────────────────────
+    //    核心修复（对局公平 · 让 AI 决策更聪明，而非给它数值外挂）：
+    //    旧实现：任意 20 格内出现真人 → 立刻放弃 land-drive/采集、全力追猎。
+    //      但 AI 的 PvP 输出 ≈ PVP_DMG/ATK_COOLDOWN = 6/8 = 0.75 每 tick，
+    //      而玩家被动回血 = HP_REGEN_PER_TICK = 0.5 每 tick → **净伤害仅 0.25/tick**，
+    //      打死满血 100HP 要 ~400 tick(20s)，且这 20s AI 完全放弃占区发育 →
+    //      "追一场空、地也丢了"。AI 不是弱，是**决策错误**：把时间浪费在打不死的追猎上。
+    //    新逻辑：只有"进攻期望收益为正"才追猎，否则继续 land-drive（AI 的主胜利线=占地）。
+    //    ─────────────────────────────────────────────────────────────────────
+    const ENGAGE_R2 = 12 * 12;                 // A1) 交战半径 20→12（更靠近才考虑打）
+    let enemy = null, ed = ENGAGE_R2;
     for (const h of humans) {
       if (!h.alive) continue;
       const d2 = (h.x - p.x) ** 2 + (h.y - p.y) ** 2;
@@ -230,61 +249,154 @@ export function stepAI(world, intents) {
     for (const o of ais) {
       if (o.id === p.id || !o.alive) continue;
       const d2 = (o.x - p.x) ** 2 + (o.y - p.y) ** 2;
-      if (d2 < ed && o.score > p.score + 30) { ed = d2; enemy = o; }
+      // B) AI 互斗领先阈值 +30 → +15（更会互相争夺地盘）
+      if (d2 < ed && o.score > p.score + 15) { ed = d2; enemy = o; }
     }
-    if (enemy && ed < 20 * 20) {
-      const dx = enemy.x - p.x, dy = enemy.y - p.y;
-      const l = Math.hypot(dx, dy) || 1;
-      moveToward(world, p, intents, enemy.x, enemy.y);
-      if (ed < 4 * 4) intents.push(p.id, { attack: { tx: enemy.x, ty: enemy.y } });
-      if (ed > 5 * 5 && ed < 14 * 14 && p.dashCharge >= 1 && p.dashCooldown === 0) {
-        intents.push(p.id, { dash: { dx, dy } });
+    // A2) "打不动就别追"判断：估算这条追猎线是否能在合理时间内杀死对方。
+    //   myDps   = PVP_DMG / ATK_COOLDOWN（每 tick 期望净输出）
+    //   enemyNet= myDps - world.HP_REGEN_PER_TICK（对方受伤后前 5s 不回血，但长期会回）
+    //   if enemyNet <= 0 → 永远打不死 → 绝不追（继续发育）。
+    //   即便净伤害为正，也要"已残血(<40%)"或"贴脸(<5格)"才追击；
+    //   否则记为一次"路过的软目标"，继续 land-drive。
+    if (enemy && ed < ENGAGE_R2) {
+      const PVP_DMG = world.PVP_DMG != null ? world.PVP_DMG : 6;             // 常量只读，不改
+      const ATK_CD = world.ATK_COOLDOWN != null ? world.ATK_COOLDOWN : 8;
+      const REGEN = world.HP_REGEN_PER_TICK != null ? world.HP_REGEN_PER_TICK : 0.5;
+      const myDps = PVP_DMG / Math.max(1, ATK_CD);            // 每 tick 期望伤害
+      const enemyNet = myDps - REGEN;                          // 每 tick 期望**净**伤害
+      const ehp = enemy.hpMax || 100;
+      const ehpFrac = (enemy.hp || 0) / (ehp || 1);
+      const canKill = enemyNet > 0 && (ehp / enemyNet) <= 240; // ≤12s 内可击杀（合理时间）
+      const almostDead = ehpFrac < 0.4;                        // 敌人已残血(<40%)
+      const inFace = ed < 5 * 5;                               // 贴脸(<5格)
+      // A5) 追猎时间上限：即使决定追猎，也最多持续 CHASE_MAX_TICKS（6s @20TPS）。
+      //     超时立即回去 land-drive —— 任何"打架"决策都不许让 AI 长期脱离扩张。
+      const CHASE_MAX_TICKS = 120;
+      const chasing = p._chaseUntil != null && world.tick < p._chaseUntil;
+      if (chasing || (canKill && (almostDead || inFace))) {
+        if (!chasing) p._chaseUntil = world.tick + CHASE_MAX_TICKS;   // 开启一段有限追猎
+        const dx = enemy.x - p.x, dy = enemy.y - p.y;
+        const l = Math.hypot(dx, dy) || 1;
+        // 保持 moveToward 追击（A* 绕墙），近距 attack
+        moveToward(world, p, intents, enemy.x, enemy.y);
+        if (ed < 6 * 6) intents.push(p.id, { attack: { tx: enemy.x, ty: enemy.y } });
+        // B) 冲刺窗口：ed>4*4 && ed<12*12 时冲刺贴身（原 16*16 收窄到交战半径内）
+        if (ed > 4 * 4 && ed < 12 * 12 && p.dashCharge >= 1 && p.dashCooldown === 0) {
+          intents.push(p.id, { dash: { dx, dy } });
+        }
+        continue;
       }
-      continue;
+      // 否则：目标"打不动/太远/我还想发育" → 清掉追猎窗口，**不追**，
+      // 直接落到下方 land-drive（A4：扩张永远是 AI 的第一优先级）。
+      p._chaseUntil = null;
+    } else {
+      p._chaseUntil = null;   // 附近无软目标 → 结束追猎窗口
     }
 
-    // 3) LAND DRIVE：殖民扩张（真正在抢地）
+    // C) 主动发育分支已下移到「步骤3 land-drive 之后」作为 fall-back（见下方），
+    //    以避免抢占 land-drive —— 真实地图资源极密时原实现每 tick 都 continue、
+    //    永远到不了 2x2 落子逻辑，导致 AI 全程 regionsOwned=0（QA 验收穿透性 bug）。
+
+    // 3) LAND DRIVE：殖民扩张（核心修复 A —— 种 2x2 可存活团）
+    //    单颗强细胞康威必死（0 邻），永远占不下区；改为在目标大区中心 2x2 生命格逐颗落子，
+    //    4 颗正交相邻（每颗 2 邻）→ 康威静止形存活 → Voronoi 多数占区。
     const owned = ownedRegions(world, f);
-    const my = myStrongCells(world, f);
     p._aiBadR = p._aiBadR || {};
-    // 若上一目标已属于我 → 清掉换下一个；若**超时仍未占住** → 记黑名单（45s 内不再选它）。
-    // （否则会永远卡在同一个区反复落子 —— 实测卡在 goal 62 刷了 2000+ tick 原地不动。）
     let goal = p._aiGoal;
-    if (goal && (owned.has(goal.r) || (goal.planted && world.tick - goal.planted > 60))) {
-      if (!owned.has(goal.r)) p._aiBadR[goal.r] = world.tick + 900;
-      goal = null; p._aiGoal = null;
+    // 清理：全 4 格已落 或 已占区 → 清 goal 换下一个；超时(>120 tick)仍未占区 → 记黑名单防死循环。
+    if (goal) {
+      if (goal.placed.size >= 4 || owned.has(goal.r)) {
+        p._aiGoal = null; goal = null;
+      } else if (world.tick - (goal.startTick != null ? goal.startTick : (p._aiGoalTick || 0)) > 120) {
+        p._aiBadR[goal.r] = world.tick + 900;   // 15s 内不再选它，防原地死循环
+        p._aiGoal = null; goal = null;
+      }
     }
     if (!goal) {
       const r = pickExpansionRegion(world, p, f, owned, p._aiBadR);
       if (r != null) {
-        goal = { r, blockCells: regionBlockCells(r), planted: 0 };
+        const blockCells = regionBlockCells(r);   // 目标区中心 2x2 的 4 个生命格
+        goal = {
+          r,
+          blockCells,
+          order: blockCells,                        // 逐格落子顺序：[rx+1,ry+1]..[rx+2,ry+2]
+          placed: new Set(),                        // 已落子的格："lx,ly"
+          startTick: world.tick,
+        };
         p._aiGoal = goal;
         p._aiGoalTick = world.tick;
       }
     }
     if (goal) {
-      // 目标大区中心（区域中心 2x2 其一，落子即覆盖中心点 → 翻转归属）
-      const [cx0, cy0] = lifeCellCenter(goal.blockCells[0][0], goal.blockCells[0][1]);
-      const dCenter = Math.hypot(cx0 - p.x, cy0 - p.y);
-      if (dCenter > 4) {
-        // 还在路上：向中心行军（A* 绕墙）
-        moveToward(world, p, intents, cx0, cy0);
+      // 取 order 中尚未 placed 的下一个目标格
+      let idx = -1;
+      for (let i = 0; i < goal.order.length; i++) {
+        const c = goal.order[i];
+        if (!goal.placed.has(c[0] + ',' + c[1])) { idx = i; break; }
+      }
+      if (idx === -1) {
+        // 兜底：理论上上面已清 goal；这里再保险一次
+        p._aiGoal = null;
+      } else {
+        const cell = goal.order[idx];
+        const [cx, cy] = lifeCellCenter(cell[0], cell[1]);   // 该格世界中心 [lx*6+3, ly*6+3]
+        const d = Math.hypot(cx - p.x, cy - p.y);
+        if (d > 3) {
+          // 还在路上：向该格中心行军（A* 绕墙）。在 4 格间来回走动 → 自然消除"发呆"，且逐格落子确保 2x2 成团
+          moveToward(world, p, intents, cx, cy);
+          continue;
+        }
+        // 已贴近该格中心（<=3 世界单位）：尝试落子
+        const canPlant = (p.seeds || 0) > 0 && p._plantCd <= 0;
+        if (canPlant) {
+          // 落子必须落在实际脚下的目标格，确保"落子格 == 记录格"一致——
+          // 边界处 AI 可能距 A 中心 <=3 却站在 B 上，若直接按 idx 记录会致 2x2 缺角→康威灭绝→占不下区。
+          const foot = world._lifeXY(p.x, p.y);
+          const footKey = foot.lx + ',' + foot.ly;
+          const fv = world._life ? world._life[foot.lx][foot.ly] : 0;
+          const footIsTarget = goal.order.some((c) => c[0] === foot.lx && c[1] === foot.ly);
+          const footOwn = _isStrong(fv) && _factionOfCell(fv) === f;
+          const footEnemy = _isStrong(fv) && _factionOfCell(fv) !== f;
+          if (footOwn) {
+            // 脚下己方强细胞（含目标格/已落格）→ 直接 mark placed，不 push plant、不扣种子（避免空喷）
+            goal.placed.add(footKey);
+          } else if (footIsTarget && !goal.placed.has(footKey) && !footEnemy) {
+            // 正站在某个未落的己方目标格内 → 落子（plant 落于脚下该格，与记录一致）
+            intents.push(p.id, { plant: true });   // engine _lifePlant 落 1 格强细胞（已确认）
+            p._plantCd = 1;                          // 扩张更快 → AI 更硬
+            goal.placed.add(footKey);
+          } else {
+            // 边界/敌方已占目标格/非目标格 → 对齐到当前目标格中心，不落子（下一 tick 再判，避免浪费种子）
+            moveToward(world, p, intents, cx, cy);
+          }
+          continue;
+        }
+        // 够近但此刻不能落（无种子/冷却中）→ 不冻结，朝"下一个未 placed 格"移动，等回种后再落
+        let moveCell = cell;
+        for (let i = idx + 1; i < goal.order.length; i++) {
+          const c = goal.order[i];
+          if (!goal.placed.has(c[0] + ',' + c[1])) { moveCell = c; break; }
+        }
+        const [mx, my] = lifeCellCenter(moveCell[0], moveCell[1]);
+        moveToward(world, p, intents, mx, my);
         continue;
       }
-      // 到点：一次落 2x2（种子引擎已改为 2x2，与玩家一致），覆盖区域中心。
-      // 不再逐格走到 0.6 精度 —— 那样会因惯性原地绕圈、永不推进 → 卡死转圈。
-      // 没种子就不死循环：原地等回种（不 moveToward，避免惯性打转），种子 ~2.25s 回一颗。
-      if ((p.seeds || 0) > 0 && p._plantCd <= 0) {
-        intents.push(p.id, { plant: true });
-        p._plantCd = 1;                     // 扩张更快（原 5→3→2→1）→ AI 更硬
-        goal.planted = world.tick;
+    }
+
+    // C) 主动发育（fallback，绝不抢占 land-drive）：仅当没有可扩张区
+    //    （p._aiGoal 仍为空 → pickExpansionRegion 返回 null）时才去附近(<25 世界格)资源采集。
+    //    走到资源上后由步骤1「hereRes」分支采集；资源采完 resList 不再含它 → 下一 tick 回到 land-drive。
+    //    这样扩张每 tick 都推进（修复：真实地图资源极密时原实现每 tick continue、永不 plant/占区）。
+    if (!p._aiGoal) {
+      let nearRes = null, nd = 25 * 25;
+      for (const r of resList) {
+        const d2 = (r.x - p.x) ** 2 + (r.y - p.y) ** 2;
+        if (d2 < nd) { nd = d2; nearRes = r; }
       }
-      // 等归属刷新：翻牌或落子超时都换下一个区（超时即记黑名单，防止原地死循环）
-      if (owned.has(goal.r) || (goal.planted && world.tick - goal.planted > 60)) {
-        if (!owned.has(goal.r)) p._aiBadR[goal.r] = world.tick + 900;
-        p._aiGoal = null;
+      if (nearRes) {
+        moveToward(world, p, intents, nearRes.x, nearRes.y);
+        continue;
       }
-      continue;
     }
 
     // 4) 全图都被占了（理论不会）→ 就近资源 / 漂移
