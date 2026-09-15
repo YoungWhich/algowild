@@ -909,7 +909,7 @@ if ($('board-edit')) $('board-edit').onclick = async () => {
         <button id="board-edit-reset"  class="board-tool">重置</button>
       </div>
       <div class="row" style="gap:4px;margin-top:4px;align-items:center">
-        <span style="font-size:11px;color:#8b949e">尺寸</span>
+        <span style="font-size:11px;color:#8b949e">尺寸（推荐 16~48）</span>
         <input id="board-edit-w" type="number" min="1" max="100" step="1" style="flex:0 0 64px">
         <span style="font-size:11px;color:#8b949e">×</span>
         <input id="board-edit-h" type="number" min="1" max="100" step="1" style="flex:0 0 64px">
