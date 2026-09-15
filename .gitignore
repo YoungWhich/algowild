@@ -33,3 +33,8 @@ _ls_*.txt
 _setup_log.txt
 _gitfix.txt
 _chk.txt
+_smoke.mjs
+_cpolar_test/
+_run_server.mjs
+_cpolar_out.txt
+_server_out.txt
