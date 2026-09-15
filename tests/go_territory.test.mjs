@@ -167,7 +167,7 @@ test('GT-05 对称盘等分：180° 旋转对称 → 双方数子相等（无 ko
 });
 
 // ============================================================ GT-06 被吃光方 0 分不反超
-test('GT-06 被吃光方分数恒 0，永不反超（只触发终局，胜负由数子决定）', () => {
+test('GT-06 被吃光方分数恒 0、不出局、永不反超（胜负由数子决定）', () => {
   const w = seated(2001);
   const L = clearLife(w);
   const B = w.go.blackF, W = w.go.whiteF;
@@ -182,11 +182,14 @@ test('GT-06 被吃光方分数恒 0，永不反超（只触发终局，胜负由
 
   const ev = [];
   w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
-  assert.ok(w.go.result, 'wiped 触发终局');
-  assert.equal(w.go.result.reason, 'wiped');
-  assert.equal(pB.lost, true, '被吃光方应 lost');
+  assert.equal(w.go.result, null, '被吃光不触发终局');
+  assert.equal(pB.lost, false, '被吃光方不出局（lost=false）');
+  // 双方连续停手 → 终局
+  w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
+  assert.ok(w.go.result, '双方停手后终局');
+  assert.equal(w.go.result.reason, 'pass');
   const rankedB = w.go.result.ranked.find(r => r.playerId === w.go.blackId);
-  assert.ok(rankedB, '被吃光方应保留在胜负池中（供平局判定）');
+  assert.ok(rankedB, '被吃光方仍在胜负池中');
   assert.equal(rankedB.score, 0, '被吃光方数子 = 0');
   assert.equal(w.go.result.winner, w.go.whiteId, '白数子多者胜（非「清盘者对手无条件胜」）');
   assert.ok(w.go.result.whiteScore > w.go.result.blackScore);

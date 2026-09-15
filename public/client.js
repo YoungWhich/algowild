@@ -1175,7 +1175,7 @@ async function showGoRules() {
       ④ <b>领地</b>：每个空点归「<b>离它最近的棋子</b>」那一方；两边一样近则该点<b>中立</b>。
       <b>得分 = 你的棋子数 + 归属你的空点数</b>（不贴子）。棋盘底色就是这套归属，与结算口径一致。<br>
       ⑤ <b>世界事件</b>：每 25 手抽一个（繁盛 / 寒潮 / 拥挤突变），只改本回合演化参数。<br>
-      ⑥ <b>终局</b>：<b>全员连续停手</b>（Pass）后按数子结算；此外 <b>手数上限</b>（默认 150）、认输、<b>累计超时</b>（默认 3 次）也会进入终局，胜者仍由数子决定。<b>吃光对方不算赢</b>——被吃光只出局、其地盘归零，棋局照常继续；只有<b>只剩一方未出局</b>时才结束。（手数上限与超时次数房主可设）<br>
+      ⑥ <b>终局</b>：<b>全员连续停手</b>（Pass）后按数子结算；此外 <b>手数上限</b>（默认 150）、认输、<b>累计超时</b>（默认 3 次）也会进入终局，胜者仍由数子决定。<b>被吃光不算输、也不出局</b>——只是当前盘面没子了，下一回合照常落子；被吃光方数子为 0、自然排末位。（手数上限与超时次数房主可设）<br>
       ⑦ <b>预览</b>：按 <kbd>Q</kbd> 开演化预览——会把本回合预选子也算进去（绿=将新生 / 红×=将死）。<br>
       <div style="margin-top:8px;color:#8b949e;font-size:12px">
       每手倒计时（默认 30 秒，房主可设），超时自动停一手。同 seed + 手顺可完整复盘（逐手一致）。
@@ -3303,7 +3303,7 @@ function renderGoHud() {
       const win = g.result.winner != null && sameId(g.result.winner, uid);
       const draw = g.result.winner == null;
       html += `<div style="margin-top:6px;color:${draw ? '#ffd479' : (win ? '#3fb950' : '#ff6b6b')}">` +
-        `<b>${draw ? '平局' : (win ? '你胜' : '你负')}</b> · ${({ pass: '双方停手（数子结算）', max_moves: '手数上限', wiped: '一方被吃光', timeout: '超时判负', resign: '认输', last_standing: '只剩一方' }[g.result.reason]) || g.result.reason}</div>`;
+        `<b>${draw ? '平局' : (win ? '你胜' : '你负')}</b> · ${({ pass: '双方停手（数子结算）', max_moves: '手数上限', timeout: '超时判负', resign: '认输' }[g.result.reason]) || g.result.reason}</div>`;
     }
     gres.innerHTML = html;
   }
@@ -3313,7 +3313,7 @@ function renderGoHud() {
     const win = g.result.winner != null && sameId(g.result.winner, uid);
     const draw = g.result.winner == null;
     const wn = g.result.winnerName || '对手';
-    const reasonCn = ({ pass: '双方停手（连续 Pass）', max_moves: '达到手数上限', wiped: '一方被吃光', timeout: '累计超时', resign: '认输', last_standing: '只剩一方' }[g.result.reason]) || g.result.reason;
+    const reasonCn = ({ pass: '双方停手（连续 Pass）', max_moves: '达到手数上限', timeout: '累计超时', resign: '认输' }[g.result.reason]) || g.result.reason;
     // 中国规则数子口径：自己的子数 + 围住的空点数 = 总分（多者胜，不贴子）
     const cs = g.chineseScore || {};
     const rank = (g.result.ranked && g.result.ranked.length) ? g.result.ranked : null;

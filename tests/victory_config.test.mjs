@@ -507,7 +507,7 @@ test('VC-10 数子并列 → 平局（winner=null，不贴子）', () => {
   assert.equal(w.players[w.go.whiteId].won, false);
 });
 
-test('VC-09 清盘不判胜：一方被吃光只触发终局，胜者由数子决定', () => {
+test('VC-09 清盘不判胜：一方被吃光不出局、不终局，胜者由数子决定', () => {
   const w = seatedGo(5);
   const L = w._life;
   const B = w.go.blackF, W = w.go.whiteF;
@@ -518,9 +518,11 @@ test('VC-09 清盘不判胜：一方被吃光只触发终局，胜者由数子�
   pB.maxLifeCells = 6; pB.lifeCells = 0;
   const ev = [];
   w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
-  assert.ok(w.go.result, 'wiped 触发终局');
-  assert.equal(w.go.result.reason, 'wiped');
-  assert.equal(pB.lost, true);
+  assert.equal(w.go.result, null, '被吃光不触发终局');
+  assert.equal(pB.lost, false, '被吃光方不出局');
+  // 双方连续停手 → 终局
+  w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
+  assert.equal(w.go.result.reason, 'pass');
   // 胜者是白（数子多）——不是"清盘者对手无条件胜"的旧逻辑，而是数子结果；此处恰好也是白
   assert.equal(w.go.result.winner, w.go.whiteId, '数子多者（白）胜');
   assert.ok(w.go.result.whiteScore > w.go.result.blackScore);

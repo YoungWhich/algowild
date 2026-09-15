@@ -255,7 +255,7 @@ test('QT-06b 180° 旋转对称盘 → 双方数子严格相等；平局（无 k
   assert.equal(w.go.result.winner, null, '等分 → 平局（黑先不加分）');
 });
 
-test('QT-06c 被吃光方恒 0 分：不反超，胜负由数子决定', () => {
+test('QT-06c 被吃光方恒 0 分、不出局：不反超，胜负由数子决定', () => {
   const w = seated(9502);
   const L = clearLife(w);
   const B = w.go.blackF, Wf = w.go.whiteF;
@@ -268,7 +268,10 @@ test('QT-06c 被吃光方恒 0 分：不反超，胜负由数子决定', () => {
   assert.equal(sc.byF[B] || 0, 0);
   const ev = [];
   w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
-  assert.equal(w.go.result.reason, 'wiped');
+  assert.equal(w.go.result, null, '被吃光不触发终局');
+  assert.equal(pB.lost, false, '被吃光方不出局');
+  w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
+  assert.equal(w.go.result.reason, 'pass');
   assert.equal(w.go.result.winner, w.go.whiteId);
   assert.equal(w.players[w.go.blackId].won, false, '被吃光方绝不判胜');
 });
@@ -302,11 +305,11 @@ test('QT-07 _goScore（Voronoi）与 _goFinish 胜负池逻辑未被本次改动
     { black: ch.black, white: ch.white },
     '_goScore（Voronoi）与 _goScoreChinese（就近数子）必须是两条不同口径',
   );
-  // 源码守卫：_goFinish 的胜负池过滤行仍在（保留被吃光方、剔除认输/超时方）。
+  // 源码守卫：_goFinish 的胜负池过滤行仍在（剔除认输方；被吃光不出局，不再需要 wiped 特殊分支）。
   const src = readFileSync(new URL('../server/go.js', import.meta.url), 'utf8');
   assert.ok(
-    /filter\(r\s*=>\s*!r\.lost\s*\|\|\s*r\.lostReason\s*===\s*'wiped'\)/.test(src),
-    '_goFinish 胜负池过滤（保留 wiped、剔除弃权）逻辑应存在且未被改动',
+    /filter\(r\s*=>\s*!r\.lost\)/.test(src),
+    '_goFinish 胜负池过滤（剔除认输 lost 方）逻辑应存在',
   );
   assert.ok(/P\._goScore\s*=\s*function/.test(src), '_goScore 定义应存在');
   assert.ok(/P\._goFinish\s*=\s*function/.test(src), '_goFinish 定义应存在');

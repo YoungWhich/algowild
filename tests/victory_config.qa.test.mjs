@@ -249,10 +249,13 @@ test('QA-04 2 人局一方被全部提光、盘面全空 → winner=null（0:0 �
   pB.maxLifeCells = 6;   // 曾建立规模
   pB.lifeCells = 0;      // 被吃光
   const ev = [];
-  w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);   // 黑已 lost，触发 wiped → 终局
-  assert.ok(w.go.result, 'wiped 应触发终局');
-  assert.equal(w.go.result.reason, 'wiped');
-  assert.equal(pB.lost, true);
+  w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);   // 被吃光不出局、不终局
+  assert.equal(w.go.result, null, '被吃光不触发终局');
+  assert.equal(pB.lost, false, '被吃光方不出局');
+  // 双方连续停手 → 终局
+  w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
+  assert.ok(w.go.result, '双方停手后终局');
+  assert.equal(w.go.result.reason, 'pass');
   // 关键断言：幸存者（白）盘面 0 子，数子同为 0 → 平局，而非"白无条件胜"
   assert.equal(w.go.result.winner, null, '盘面全空 → 0:0 平局，winner=null');
   assert.equal(w.players[w.go.whiteId].won, false, '幸存者不得被无条件判胜');
@@ -269,12 +272,14 @@ test('QA-04 一方被吃光但幸存者盘面有子且更高分 → 数子高者
   pB.maxLifeCells = 6; pB.lifeCells = 0;
   const ev = [];
   w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
-  assert.equal(w.go.result.reason, 'wiped');
+  assert.equal(w.go.result, null, '被吃光不触发终局');
+  w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
+  assert.equal(w.go.result.reason, 'pass');
   assert.ok(w.go.result.whiteScore > w.go.result.blackScore, '白数子应领先');
   assert.equal(w.go.result.winner, w.go.whiteId, '数子高者（白）胜——结果来自数子，而非旧"清盘者对手无条件胜"');
 });
 
-test('QA-04 被吃光方即使 0 子也不会"反超"：wiped 方数子恒计入池但分数为 0', () => {
+test('QA-04 被吃光方即使 0 子也不会"反超"：数子恒计入池但分数为 0', () => {
   const w = seatedGo(403);
   const L = clearLife(w);
   L[15][15] = w.go.whiteF;  // 白 1 子
@@ -282,8 +287,10 @@ test('QA-04 被吃光方即使 0 子也不会"反超"：wiped 方数子恒计入
   pB.maxLifeCells = 5; pB.lifeCells = 0;
   const ev = [];
   w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
+  assert.equal(w.go.result, null, '被吃光不触发终局');
+  w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
   const rankedB = w.go.result.ranked.find(r => r.playerId === w.go.blackId);
-  assert.ok(rankedB, '被吃光方应保留在 ranked（供平局判定的池）');
+  assert.ok(rankedB, '被吃光方应保留在 ranked');
   assert.equal(rankedB.score, 0, '被吃光方数子 = 0，不可能反超');
   assert.equal(w.go.result.winner, w.go.whiteId);
 });

@@ -873,7 +873,7 @@ export function installGoMode(World) {
       return {
         playerId: pid, faction: f, name: p ? p.name : String(pid),
         isAI: !!(p && p.isAI), botControlled: !!(p && p.botControlled), lost: !!(p && p.lost),
-        lostReason: (p && p.lostReason) || null,             // 'wiped' | 'resign' | ...（供胜负池判定）
+        lostReason: (p && p.lostReason) || null,             // 'resign' | ...（go 模式被吃光不出局）
         score: byF[f] || 0,                                  // 数子总分
         stones: stoneByF[f] || 0,                            // 明细：子数
         empty: emptyByF[f] || 0,                             // 明细：围住空点
@@ -886,7 +886,7 @@ export function installGoMode(World) {
   // ---------- 回合状态机 / 终局 ----------
 
   /**
-   * 结束当前回合：结算 pass / 手数 / 吃光 / 超时，然后轮到下一位并推进周期机制。
+   * 结束当前回合：结算 pass / 手数 / 超时，然后轮到下一位并推进周期机制。
    * N 方规则：**全员各 pass 一次**（连续 passStreak ≥ 在座人数）→ 终局。
    * @param {object|null} played 本回合的落子结果（null = 本回合是 pass）
    * @param {object[]} events
@@ -901,40 +901,14 @@ export function installGoMode(World) {
     if (g.passStreak >= seats.length) endReason = 'pass';
     else if (g.moveNo >= this.goLimits.maxMoves) endReason = 'max_moves';
 
-    // 吃光出局（"一条命"）：曾建立规模（≥ WIPE_ELIM_MIN_CELLS）后被清零 → 登记出局。
-    // ⚠️ 用户拍板（VC-09/VC-10）：吃光**不算赢**（围棋真规则）；胜负一律由 _goFinish
-    //    → _goScoreChinese 数子决定，wiped 方 0 分、永不反超。
-    // ⚠️ 2026-09-15 修复（"怎么输的这么快"）：`wiped` 此前被当作**整局终局触发器**，
-    //    这在 2 人局成立（你被吃光 = 棋局实质结束），但在 N 方局（1 人 + 3 电脑）是错的——
-    //    任何一个 AI 被吃光就会把整局掐断，玩家才下 2 手就被判负。
-    //    现改为：被吃光**只登记出局**（lost），**不触发终局**；整局由下方
-    //    `last_standing`（只剩一方未出局）或 pass / 手数上限判定。
-    //    （2 人局行为等价：一方被吃光 → 只剩一方 → last_standing 触发终局，胜负仍由数子决定。）
-    let wipedAny = false;
-    for (const pid of seats) {
-      const p = this.players[pid];
-      if (!p || p.lost) continue;
-      if ((p.maxLifeCells || 0) >= World.WIPE_ELIM_MIN_CELLS && (p.lifeCells || 0) === 0) {
-        p.lost = true; p.lostReason = 'wiped';
-        events.push({ type: 'eliminated', playerId: pid, reason: 'wiped' });
-        wipedAny = true;
-      }
-    }
     // 累计超时判负
     for (const pid of seats) {
       const p = this.players[pid];
       if (p && (p.goTimeouts || 0) >= this.goLimits.maxTimeouts && !endReason) endReason = 'timeout';
     }
-    // 只剩一方未出局 → 触发终局（胜负仍由 _goFinish 数子排名决定，非"最后一人无条件胜"）。
-    // reason 区分：本回合因「被吃光」淘汰到只剩一方 → 'wiped'（保留 2 人局原语义/文案）；
-    // 否则（如超时/认输导致只剩一方）→ 'last_standing'。
-    const aliveSeats = seats.filter(pid => !(this.players[pid] && this.players[pid].lost));
-    if (!endReason && aliveSeats.length <= 1 && seats.length > 1) {
-      endReason = wipedAny ? 'wiped' : 'last_standing';
-    }
     if (endReason) { this._goFinish(endReason, events); return; }
 
-    // 轮到下一位（跳过已出局者）
+    // 轮到下一位（跳过已出局者——go 模式下「出局」只来自认输 resign，被吃光不出局）
     let step = 0;
     do {
       g.turnIdx = (g.turnIdx + 1) % seats.length;
@@ -951,17 +925,16 @@ export function installGoMode(World) {
   /**
    * 终局结算：按**中国规则数子**（子数 + 围住空点）排名，唯一最高者胜（并列则平局，不贴子）。
    * 胜利线【领土】关闭时（含全关）→ 不宣告任何胜者（winner=null），只出明细。
-   * @param {string} reason 终局原因（pass / max_moves / wiped / timeout / resign / last_standing）
+   * @param {string} reason 终局原因（pass / max_moves / timeout / resign）
    * @param {object[]} events
    */
   P._goFinish = function _goFinish(reason, events) {
     const g = this._goInit();
     const sc = this._goScoreChinese();          // ← 中国规则数子（取代 Voronoi 目数 _goScore）
-    // 参与胜负比较的池：剔除「弃权类出局」（认输/超时判负——这些方已主动放弃，绝不应判胜），
-    // 但**保留「被吃光 wiped」方**（用户拍板 VC-09：吃光不算赢，只触发终局）。
-    // 被吃光方盘面 0 子 ⇒ 数子恒为 0，保留它只会让「双方同为 0」正确地判为平局（并列），
-    // 永远不会让它反超别人（0 分无法高于任何正分），从而杜绝旧的“吃光者对手无条件胜”。
-    const pool = sc.ranked.filter(r => !r.lost || r.lostReason === 'wiped');
+    // 参与胜负比较的池：剔除「弃权类出局」（认输 resign——已主动放弃，绝不应判胜）。
+    // go 模式下被吃光**不出局**（lost 恒 false），其盘面 0 子 ⇒ 数子恒为 0、自然排末位，
+    // 永远不会反超任何正分；只有认输（lost=true）才会被剔除出胜负池。
+    const pool = sc.ranked.filter(r => !r.lost);
     const eff = pool.length ? pool : sc.ranked;   // 全员弃权等极端情况退化为全席位排名
     let winner = null;
     // 胜利线【领土】开着才宣告胜者；关掉 → winner=null（E6/VC-02）。
@@ -1077,7 +1050,8 @@ export function installGoMode(World) {
     const pid = (g.seats && g.seats[g.turnIdx] != null) ? g.seats[g.turnIdx] : null;
     const p = pid != null ? this.players[pid] : null;
     if (!p) return false;
-    // 已出局（被吃光 / 认输）的 AI 不再出手——换手逻辑本应跳过它，此处兜底防御。
+    // 已出局（认输 resign）的 AI 不再出手——换手逻辑本应跳过它，此处兜底防御。
+    // （go 模式被吃光不出局，故 lost 只会来自认输。）
     if (p.lost) return false;
     // "电脑驱动" = 原生 AI 或 掉线被接管
     if (!(p.isAI === true || p.botControlled === true)) return false;
