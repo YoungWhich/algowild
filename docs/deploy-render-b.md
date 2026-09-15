@@ -33,21 +33,19 @@
    - 选 **Public**
    - **不要**勾 "Add a README"（我们本地已有文件）
    - 点 **Create repository**
-3. 创建好后，GitHub 会显示一个快速上手页。复制里面的那两行"…or push an existing repository"（形如 `git remote add origin https://github.com/你的名/algowild.git` 和 `git push -u origin main`）。
-4. 在本机打开 **PowerShell**（Win 键搜 PowerShell），依次粘贴执行（每行回车）：
+3. 创建好后，GitHub 会显示一个快速上手页，里面有你的仓库地址（形如 `https://github.com/你的名/algowild.git`）。
+4. **本地仓库我已经帮你初始化并提交好了**（分支 `main`，145 个文件，已自动排除 `node_modules/`、数据库、`*.txt` 临时探针）。你不用再 `git init` / `commit`，否则会重复或报"nothing to commit"。
+
+   你只需要在本机打开 **PowerShell**（Win 键搜 PowerShell），粘贴执行这两行（把 `你的名` 换成你的 GitHub 用户名）：
 
 ```powershell
-cd D:\workspace\Game
-git init
-git add -A
-git commit -m "algowild 部署版"
-git branch -M main
 git remote add origin https://github.com/你的名/algowild.git
 git push -u origin main
 ```
 
 > 第一次 push 会弹出 GitHub 登录框，按提示登录授权即可。
 > 推送完，刷新 GitHub 页面，能看到 `server/`、`public/`、`package.json` 等就成功了。
+> （本地 git 身份暂设为 `JM <jm@local>`，想用真实邮箱可在仓库目录跑 `git config user.email 你的邮箱` 修改。）
 
 ---
 
