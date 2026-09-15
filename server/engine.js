@@ -41,6 +41,8 @@ export class World {
     // 模式：'rts'（默认，行为逐字节不变）| 'go'（回合制 · 演化棋）。
     // go 模式走独立分支：不参与 20 TPS tick、无地形资源、固定 2 座位。
     this.mode = (opts && opts.mode) || 'rts';
+    // 生命层边长（正方形）：rts 恒 32（1 生命格 = 6x6 世界格）；go 跟随棋盘尺寸（_compileBoard 里设定）。
+    this.lifeW = World.LIFE_W;
     this.go = null;                 // go 模式状态容器（惰性 _goInit）
     this.goBlackId = null;          // go 首座 playerId（先手；多方局=第一个就座者）
     this.goWhiteId = null;          // go 次座 playerId（兼容保留；多方局以 goSeatIds 为准）
@@ -864,16 +866,17 @@ export class World {
    * 非法 / null / '' / 解析失败 / 行数或列数不符 / 全形状外 → null（回现状矩形）。
    * 字符合法性：非法字符宽容地视为形状外（不整体回默认）；但若没有任何可落子格 → 回默认。
    * @param {object|string|null|undefined} v {w,h,shape} 或 JSON 串
-   * @param {('rts'|'go'|null|undefined)} mode  （不做差异化：go/rts 都能用形状）
+   * @param {('rts'|'go'|null|undefined)} mode 尺寸上限按模式：rts 生命层恒 32（棋盘只做遮罩）；go 1..100
    * @returns {{w:number,h:number,shape:string}|null}
    */
   static normBoard(v, mode) {
-    void mode;
     let o = v;
     if (typeof o === 'string') { try { o = JSON.parse(o); } catch (e) { return null; } }
     if (!o || typeof o !== 'object') return null;                    // E1/E12：无 shape → 默认矩形
-    const w = World._clampInt(o.w, 0, World.BOARD_MIN, World.BOARD_MAX);
-    const h = World._clampInt(o.h, 0, World.BOARD_MIN, World.BOARD_MAX);
+    // 尺寸上限：go 棋盘即棋盘 → 100；rts 生命层恒 32×32，棋盘只做遮罩 → 32。
+    const maxN = (mode === 'rts') ? World.LIFE_W : World.BOARD_MAX;
+    const w = World._clampInt(o.w, 0, World.BOARD_MIN, maxN);
+    const h = World._clampInt(o.h, 0, World.BOARD_MIN, maxN);
     if (!Number.isInteger(w) || !Number.isInteger(h) || w < World.BOARD_MIN || h < World.BOARD_MIN) return null;
     const shape = String(o.shape == null ? '' : o.shape);
     const rows = shape.split('/');
@@ -1076,14 +1079,15 @@ export class World {
 
   _lifeInit() {
     if (!this._life) {
-      this._life = Array.from({ length: World.LIFE_W }, () => new Int8Array(World.LIFE_W));
+      const N = this.lifeW || World.LIFE_W;
+      this._life = Array.from({ length: N }, () => new Int8Array(N));
       this._lifeOwners = [];      // factionId-1 => playerId
       this._regionFaction = new Array(World.REGION_W * World.REGION_W).fill(0);
-      this._lifeOwner = Array.from({ length: World.LIFE_W }, () => new Int8Array(World.LIFE_W));
+      this._lifeOwner = Array.from({ length: N }, () => new Int8Array(N));
       // 死亡宽限网格：-1 = 尚未获得宽限；>=0 = 剩余宽限回合数（无法存活的单位先撑一会儿）。
-      this._lifeDoom = Array.from({ length: World.LIFE_W }, () => new Int8Array(World.LIFE_W).fill(-1));
+      this._lifeDoom = Array.from({ length: N }, () => new Int8Array(N).fill(-1));
       // 棋子伤害网格：强细胞累积的敌方攻击伤害（近战吞噬），>= CELL_ATK_HP 即被击碎。
-      this._lifeDmg = Array.from({ length: World.LIFE_W }, () => new Int8Array(World.LIFE_W));
+      this._lifeDmg = Array.from({ length: N }, () => new Int8Array(N));
     }
   }
   // ---- 可编辑棋盘：编译 / 墙判定（生命格粒度）----
@@ -1095,11 +1099,32 @@ export class World {
     const cfg = World.normBoard(raw, this.mode);
     this._boardRev = (this._boardRev || 0) + 1;   // 形状变更版本号（低频下发用）
     this._boardMapSentRev = null;
-    if (!cfg) { this.board = null; this._boardW = null; this._boardH = null; this._bmp = null; return; }
+    if (!cfg) {
+      this.board = null; this._boardW = null; this._boardH = null; this._bmp = null;
+      this._setLifeW(World.LIFE_W, false);        // 回默认矩形 → 生命层回 32
+      return;
+    }
     this.board = cfg;
     this._boardW = cfg.w;
     this._boardH = cfg.h;
     this._bmp = World.decodeBoard(cfg);
+    // go 模式：生命层**只涨不缩** —— max(32, 棋盘宽, 棋盘高)。
+    // 棋盘 ≤32 时保持 32×32（超出棋盘的部分由 World.isWall 判为墙，行为与改造前逐字节一致）；
+    // 棋盘 >32 时扩容到棋盘尺寸，使 100×100 等大盘真正可用（此前会因坐标越界崩溃）。
+    // rts 恒 32（1 生命格 = 6×6 世界格，棋盘只做遮罩），且 rts 棋盘已被 normBoard 限到 ≤32。
+    this._setLifeW(this.mode === 'go' ? Math.max(World.LIFE_W, cfg.w, cfg.h) : World.LIFE_W, true);
+  }
+  /**
+   * 设定生命层边长（内部）。若已有生命层且尺寸变化 → 置空触发 _lifeInit 重分配
+   * （仅可能在棋局开始前发生：已开局的形状变更被路由层 403 board_locked 拦截）。
+   * @param {number} n @param {boolean} followBoard 是否由棋盘推导（仅用于注释/调试）
+   */
+  _setLifeW(n, followBoard) {
+    void followBoard;
+    const v = World._clampInt(n, World.LIFE_W, 1, World.BOARD_MAX);
+    if (this.lifeW === v) return;
+    this.lifeW = v;
+    if (this._life && this._life.length !== v) this._life = null;   // → _lifeInit 按新尺寸重建
   }
   /**
    * 实例墙判定便捷法（go/rts 统一用生命格坐标）。
@@ -1109,7 +1134,8 @@ export class World {
    */
   _isWall(lx, ly) {
     if (this._bmp) return World.isWall(this._bmp, this._boardW, this._boardH, lx, ly);
-    return lx < 0 || ly < 0 || lx >= World.LIFE_W || ly >= World.LIFE_W;
+    const N = this.lifeW || World.LIFE_W;
+    return lx < 0 || ly < 0 || lx >= N || ly >= N;
   }
   /** (lx,ly) 是否可落子（= 非墙）。 */
   _isPlayable(lx, ly) { return !this._isWall(lx, ly); }
@@ -1141,9 +1167,10 @@ export class World {
   }
   _lifeXY(x, y) {
     const c = World.LIFE_CELL;
+    const N = this.lifeW || World.LIFE_W;
     return {
-      lx: Math.max(0, Math.min(World.LIFE_W - 1, Math.floor(x / c))),
-      ly: Math.max(0, Math.min(World.LIFE_W - 1, Math.floor(y / c))),
+      lx: Math.max(0, Math.min(N - 1, Math.floor(x / c))),
+      ly: Math.max(0, Math.min(N - 1, Math.floor(y / c))),
     };
   }
   // Cell encoding: 0 = empty, 1..8 = STRONG cell of faction n, 11..18 = weak TRAIL.
@@ -1190,7 +1217,7 @@ export class World {
   // 并引入"死亡宽限"（lonelyDeathDelay）与"棋子近战吞噬"（见 _cellCombat）。
   _lifeStep(events) {
     this._lifeInit();
-    const W = World.LIFE_W;
+    const W = this.lifeW;
     const resistOf = Object.create(null);
     for (const p of Object.values(this.players)) resistOf[this._factionOf(p.id)] = p.resist || 1.0;
     const sh = this._stronghold;   // undefined until first detection
@@ -1277,7 +1304,7 @@ export class World {
   //      dmg >= killAt → 强细胞被击碎（清除）。这样 resist 1.0~1.99 也有真实减伤效果（无 floor 死区）。
   _cellCombat(events, resistOf, sh) {
     this._lifeInit();
-    const W = World.LIFE_W;
+    const W = this.lifeW;
     const L = this._life;
     const dmg = this._lifeDmg;
     const dir8 = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
@@ -1417,7 +1444,7 @@ export class World {
   // aim for: it anchors ground, resists being eaten, and scores over time.
   _detectStrongholds() {
     this._lifeInit();
-    const W = World.LIFE_W;
+    const W = this.lifeW;
     if (!this._stronghold) this._stronghold = Array.from({ length: W }, () => new Uint8Array(W));
     for (let x = 0; x < W; x++) for (let y = 0; y < W; y++) this._stronghold[x][y] = 0;
     const perFaction = Object.create(null);
@@ -1490,8 +1517,8 @@ export class World {
   _lifePenalty(p, ratio) {
     this._lifeInit();
     const f = this._factionOf(p.id);
-    for (let x = 0; x < World.LIFE_W; x++) {
-      for (let y = 0; y < World.LIFE_W; y++) {
+    for (let x = 0; x < this.lifeW; x++) {
+      for (let y = 0; y < this.lifeW; y++) {
         if (this._life[x][y] === f && this._rng() < ratio) this._life[x][y] = 0;
       }
     }
@@ -1503,8 +1530,8 @@ export class World {
     // 阵营槽位/数组（_factionOf 会向 _lifeOwners push）。
     if (!this._life) return;
     const f = this._factionOf(p.id);
-    for (let x = 0; x < World.LIFE_W; x++) {
-      for (let y = 0; y < World.LIFE_W; y++) {
+    for (let x = 0; x < this.lifeW; x++) {
+      for (let y = 0; y < this.lifeW; y++) {
         // F3（QA P2-1）：弱痕（f+10）也要擦。只擦强细胞会留下 ~10 格弱痕，而弱痕
         // 仍参与 _lifeStep 的邻域计数，n===3 时能再生出强细胞 → 幽灵势力低概率复活
         // 并污染 regionFaction。（_lifePenalty 仍只作用于强细胞：死亡惩罚不该顺带清痕迹。）
@@ -1535,7 +1562,7 @@ export class World {
   // This is the "Go/Chess-like" spatial game: WHERE you plant matters, not just that you plant.
   _updateVoronoi(rOverride) {
     this._lifeInit();
-    const W = World.LIFE_W;
+    const W = this.lifeW;
     if (!this._lifeOwner) this._lifeOwner = Array.from({ length: W }, () => new Int8Array(W));
     // Collect strong-cell sites (faction 1..8) as Voronoi seeds.
     const sites = [];
@@ -1575,13 +1602,13 @@ export class World {
   // Territory = which faction has the most owned life cells in each macro region.
   _updateRegionControl() {
     this._lifeInit();
-    const W = World.LIFE_W;
+    const W = this.lifeW;
     // 1) Voronoi ownership of every life cell.
     this._updateVoronoi();
     const owner = this._lifeOwner;
     // 2) Strong-cell counts -> lifeCells; per-region ownership -> regionFaction.
     const cellCounts = Object.create(null);
-    const perRegion = World.LIFE_W / World.REGION_W;  // 32/8 = 4 life cells per region side（与 REGION_SIZE/世界格 无关，随生命格推导）
+    const perRegion = this.lifeW / World.REGION_W;  // 32/8 = 4 life cells per region side（与 REGION_SIZE/世界格 无关，随生命格推导）
     const counts = Array.from({ length: World.REGION_W * World.REGION_W }, () => Object.create(null));
     for (let x = 0; x < W; x++) {
       for (let y = 0; y < W; y++) {
@@ -1770,9 +1797,9 @@ export class World {
     const out = [];
     const dmg = this._lifeDmg;
     if (!dmg) return out;
-    for (let x = 0; x < World.LIFE_W; x++) {
+    for (let x = 0; x < this.lifeW; x++) {
       const col = dmg[x];
-      for (let y = 0; y < World.LIFE_W; y++) {
+      for (let y = 0; y < this.lifeW; y++) {
         const d = col[y];
         if (d > 0) out.push([x, y, d]);
       }
@@ -1820,7 +1847,7 @@ export class World {
       tech: { ...this.tech },
       // Life board: 32x32 grid of faction ids (0 = empty). This is what the player sees.
       lifeGrid: this._life.map(col => Array.from(col)),
-      lifeW: World.LIFE_W,
+      lifeW: this.lifeW,
       // factionId-1 => playerId, so the client can map grid values to colors
       lifeOwners: this._lifeOwners.slice(),
       // Voronoi ownership of each life cell (faction id, 0 = neutral) — smooth,

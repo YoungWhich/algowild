@@ -395,8 +395,10 @@ test('QA-SNAP-1 普通 board：settings.board 每帧携带，boardMap 为紧凑�
 });
 
 test('QA-SNAP-2 100×100 board：boardMap 紧凑串（非 100×100 数组），长度合理', () => {
+  // 100×100 仅 go 模式合法（rts 生命层恒 32，棋盘上限 32 —— 见 board_size.test.mjs）。
+  // 本用例验证的是「大尺寸下 boardMap 仍为紧凑串」这一与模式无关的机制。
   const board = mkBoard(100, 100, World.presetBoard('rect', 100, 100, 1).shape);
-  const w = freshWorld(20, { mode: 'rts', board });
+  const w = freshWorld(20, { mode: 'go', board });
   const s0 = w.snapshot();
   assert.deepEqual(s0.settings.board, board, 'settings.board 每帧携带');
   assert.ok(typeof s0.boardMap === 'string', 'boardMap 是串');

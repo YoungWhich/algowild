@@ -192,7 +192,7 @@ function clampInt(v, min, max, dflt) {
 //   三态：0=形状外/墙（SHAPE_OUT）· 1=可落子（SHAPE_PLAY）· 2=虚空/墙（SHAPE_VOID）
 //   位图索引：行优先 bmp[ly*w + lx]
 //   序列化：行优先，'.'=形状外 '#'=可落子 'x'=虚空，行间用 '/' 分隔（紧凑串）
-//   null = 默认矩形（实时 192×192 / 回合制 32×32），服务端把 null 归一为默认矩形。
+//   null = 默认矩形（实时 rts：32×32 生命格遮罩 / 回合制 go：32×32 棋盘），服务端把 null 归一为默认矩形。
 const BOARD_MAX = 100;         // 位图边长上限（含）
 const BOARD_MIN = 1;           // 位图边长下限（含）
 const BOARD_OUT = 0, BOARD_PLAY = 1, BOARD_VOID = 2;
@@ -205,9 +205,11 @@ const BOARD_COLOR = {
   2: '#f85149',   // 虚空（墙）
 };
 
-// 尺寸上限：由模式决定（实时 192 / 回合制 32）。未知模式 → 32。
+// 尺寸上限：rts 生命层恒 32（棋盘只做遮罩）；go 棋盘即棋盘 → 100。
 function boardMaxForMode(mode) {
-  return (mode === 'rts') ? 192 : 32;
+  // go：棋盘即棋盘（生命层随棋盘尺寸）→ 上限 100，与后端 World.BOARD_MAX 一致。
+  // rts：生命层恒 32×32（1 生命格 = 6×6 世界格），棋盘只做遮罩 → 上限 32。
+  return (mode === 'rts') ? 32 : 100;
 }
 
 // 位图 → 紧凑序列化串（行优先，'/' 分行）。
@@ -380,7 +382,7 @@ class BoardEditor {
     this.mode = mode === 'go' ? 'go' : 'rts';
     this.max = boardMaxForMode(this.mode);
     this.onChange = (opts && opts.onChange) || null;
-    // 默认尺寸：rts 32（示意，服务端权威仍为 192）/ go 32
+    // 默认尺寸：rts / go 都是 32（rts 生命层上限即 32；go 可再调到 100）。
     const defN = this.mode === 'rts' ? 32 : 32;
     this.board = null;              // null = 默认矩形
     this.w = defN;
@@ -512,7 +514,7 @@ class BoardEditor {
   // 当前是否等于默认矩形（全可落子）。注意：这里默认矩形指"当前 w×h 全可落子"，
   // 但因为 null 语义是模式默认尺寸，只有当 w/h 等于模式默认尺寸时才等价 null。
   _isDefaultRect() {
-    const defN = boardMaxForMode(this.mode) === 192 ? 32 : 32; // 前端 null 的示意默认边长
+    const defN = 32; // 前端 null 的示意默认边长（两种模式默认棋盘都是 32）
     if (this.w !== defN || this.h !== defN) return false;
     for (let i = 0; i < this.shape.length; i++) if (this.shape[i] !== BOARD_PLAY) return false;
     return true;
@@ -652,7 +654,7 @@ function onModeChange() {
   const mode = ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts';
   const cur = collectVictoryLines('victory-lines-build-list', mode === 'go' ? 'rts' : 'go'); // 保留旧模式下的选择
   renderVictoryLines('victory-lines-build-list', mode, cur, true);
-  // 棋盘尺寸上限随模式变化（实时 192 / 回合制 32）→ 重建编辑器
+  // 棋盘尺寸上限随模式变化（rts 32 / go 100）→ 重建编辑器
   buildBoardEditor(mode);
 }
 if ($('room-vis')) $('room-vis').onchange = () => {
@@ -681,8 +683,8 @@ function refreshBoardBuildInfo(tplKey) {
     });
   }
   const curW = $('board-build-w'), curH = $('board-build-h');
-  if (curW) curW.value = boardBuildEditor.w;
-  if (curH) curH.value = boardBuildEditor.h;
+  if (curW) { curW.value = boardBuildEditor.w; curW.max = boardBuildEditor.max; }
+  if (curH) { curH.value = boardBuildEditor.h; curH.max = boardBuildEditor.max; }
 }
 // 重建（或首次创建）建房弹窗棋盘编辑器。
 function buildBoardEditor(mode) {
@@ -941,8 +943,10 @@ if ($('board-edit')) $('board-edit').onclick = async () => {
   });
   if ($('board-edit-rotate')) $('board-edit-rotate').onclick = () => { if (!ed.rotate()) toast('旋转后超出尺寸上限'); if ($('board-edit-info')) $('board-edit-info').textContent = ed.infoText(); };
   if ($('board-edit-reset')) $('board-edit-reset').onclick = () => { ed.reset(); if ($('board-edit-info')) $('board-edit-info').textContent = ed.infoText(); };
-  if ($('board-edit-w')) $('board-edit-w').onchange = () => { ed.setSize(parseInt($('board-edit-w').value, 10), ed.h); if ($('board-edit-info')) $('board-edit-info').textContent = ed.infoText(); };
-  if ($('board-edit-h')) $('board-edit-h').onchange = () => { ed.setSize(ed.w, parseInt($('board-edit-h').value, 10)); if ($('board-edit-info')) $('board-edit-info').textContent = ed.infoText(); };
+  if ($('board-edit-w')) $('board-edit-w').onchange = () => { ed.setSize(parseInt($('board-edit-w').value, 10), ed.h); $('board-edit-w').value = ed.w; $('board-edit-w').max = ed.max; if ($('board-edit-info')) $('board-edit-info').textContent = ed.infoText(); };
+  if ($('board-edit-h')) $('board-edit-h').onchange = () => { ed.setSize(ed.w, parseInt($('board-edit-h').value, 10)); $('board-edit-h').value = ed.h; $('board-edit-h').max = ed.max; if ($('board-edit-info')) $('board-edit-info').textContent = ed.infoText(); };
+  if ($('board-edit-w')) $('board-edit-w').max = ed.max;
+  if ($('board-edit-h')) $('board-edit-h').max = ed.max;
   if ($('board-edit-brush')) { $('board-edit-brush').style.borderColor = '#58a6ff'; $('board-edit-brush').style.color = '#58a6ff'; }
   const ok = $('modal-ok');
   ok.textContent = '保存';

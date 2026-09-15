@@ -520,7 +520,7 @@ function goCaptureAt(L, f, x, y, W) {
  * @returns {{moves:Array<{lx:number, ly:number}>}|{pass:boolean}|null}
  */
 export function goAIMove(world, f) {
-  const W = GO_LIFE_W;
+  const W = world.lifeW || GO_LIFE_W;   // go 生命层随棋盘尺寸（rts 恒 32；自定义棋盘 1..100）
   const L = goLife(world);
   // 形状/虚空感知：非矩形棋盘上，AI 只在「可落子」格选点（否则整批非法 → 被判 pass）。
   const playable = (x, y) => !(world._isWall && world._isWall(x, y));

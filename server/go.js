@@ -28,7 +28,7 @@ export function installGoMode(World) {
   const P = World.prototype;
 
   // ---------- 常量（挂在 World 上，供 engine / net / 测试统一引用） ----------
-  World.GO_BOARD_W = 32;            // 与 World.LIFE_W 一致（断言相等）
+  World.GO_BOARD_W = 32;            // 默认棋盘边长（= World.LIFE_W）；自定义棋盘见 world.lifeW
   World.GO_TURN_MS = 30000;         // 每手上限（毫秒）
   World.GO_MAX_MOVES = 150;         // 手数上限
   World.GO_PASS_END = 2;            // 连续 pass 终局
@@ -129,7 +129,7 @@ export function installGoMode(World) {
    * @returns {number} 气数（0 = 无气）
    */
   P._goLiberties = function _goLiberties(x, y) {
-    const L = this._life, W = World.LIFE_W;
+    const L = this._life, W = this.lifeW;
     const f = L[x][y];
     if (!f) return 0;
     const seen = new Set();
@@ -156,7 +156,7 @@ export function installGoMode(World) {
    * @returns {number} 被提格数（0 = 未提，因为该团尚有气或该点为空）
    */
   P._goTryCapture = function _goTryCapture(x, y) {
-    const L = this._life, W = World.LIFE_W;
+    const L = this._life, W = this.lifeW;
     const f = L[x][y];
     if (!f) return 0;
     if (this._goLiberties(x, y) !== 0) return 0;
@@ -194,7 +194,7 @@ export function installGoMode(World) {
    */
   P._goSameAs = function _goSameAs(a, b) {
     if (!a || !b) return false;
-    const W = World.LIFE_W;
+    const W = this.lifeW;
     for (let x = 0; x < W; x++) {
       const ca = a[x], cb = b[x];
       for (let y = 0; y < W; y++) if (ca[y] !== cb[y]) return false;
@@ -208,7 +208,7 @@ export function installGoMode(World) {
    * @returns {string} 形如 "0,0|1,0|1,1"
    */
   P._goGroupSig = function _goGroupSig(lx, ly) {
-    const L = this._life, W = World.LIFE_W;
+    const L = this._life, W = this.lifeW;
     const f = L[lx][ly];
     if (!f) return null;
     const seen = new Set([lx * W + ly]);
@@ -265,7 +265,7 @@ export function installGoMode(World) {
    */
   P._goPlayBatch = function _goPlayBatch(f, moves, events) {
     const g = this._goInit();
-    const L = this._life, W = World.LIFE_W;
+    const L = this._life, W = this.lifeW;
     if (!Array.isArray(moves) || moves.length === 0) return { ok: false, reason: 'bad_move' };
     if (moves.length > this.stonesPerTurn) return { ok: false, reason: 'too_many_stones' };
     // ① 校验整批（原子性：任一非法则整批拒绝，棋盘不变）
@@ -339,7 +339,7 @@ export function installGoMode(World) {
    * @returns {{lx:number, ly:number}|null}
    */
   P._goLoneLiberty = function _goLoneLiberty(x, y) {
-    const L = this._life, W = World.LIFE_W;
+    const L = this._life, W = this.lifeW;
     const f = L[x][y];
     if (!f) return null;
     const seen = new Set([x * W + y]);
@@ -390,7 +390,7 @@ export function installGoMode(World) {
    * @param {number} bornThresh 诞生阈值
    */
   P._goEvolveOnce = function _goEvolveOnce(bornThresh) {
-    const L = this._life, W = World.LIFE_W;
+    const L = this._life, W = this.lifeW;
     const g = this.go, jp = g && g.lastPlacedKeys;
     const next = Array.from({ length: W }, () => new Int8Array(W));
     // 死亡宽限网格（与 rts 共用同一语义）：-1 未获宽限；>=0 剩余宽限步数。
@@ -515,7 +515,7 @@ export function installGoMode(World) {
    */
   P._goPatternBonus = function _goPatternBonus() {
     const g = this._goInit();
-    const L = this._life, W = World.LIFE_W;
+    const L = this._life, W = this.lifeW;
     const maxSize = World.GO_PATTERN_MAX_SIZE;
     const byF = Object.create(null);
     const out = { byF, black: 0, white: 0, hits: [] };
@@ -602,7 +602,7 @@ export function installGoMode(World) {
    * @returns {boolean}
    */
   P._goCanShift = function _goCanShift(comp, minX, minY, f) {
-    const L = this._life, W = World.LIFE_W;
+    const L = this._life, W = this.lifeW;
     void minX; void minY;
     for (const [dx, dy] of NEI4) {
       let ok = 0;
@@ -638,7 +638,7 @@ export function installGoMode(World) {
    */
   P._goScore = function _goScore() {
     const g = this._goInit();
-    const W = World.LIFE_W;
+    const W = this.lifeW;
     // 呼吸半径：rts 传 undefined 走原纪元逻辑；go 传数字统一半径
     this._updateVoronoi(g._breathR);
     const own = this._lifeOwner;
@@ -690,7 +690,7 @@ export function installGoMode(World) {
    * @returns {{byF:Object<number,number>}} faction -> 被该阵营围住的空点数
    */
   P._goEnclosedEmpty = function _goEnclosedEmpty() {
-    const W = World.LIFE_W, L = this._life;
+    const W = this.lifeW, L = this._life;
     const seen = new Uint8Array(W * W);          // 访问标记（0/1）
     const byF = Object.create(null);
     for (let x = 0; x < W; x++) {
@@ -738,7 +738,7 @@ export function installGoMode(World) {
    * @returns {{byF:Object<number,number>}} faction -> 归属该阵营的空点数
    */
   P._goNearestEmpty = function _goNearestEmpty() {
-    const W = World.LIFE_W, L = this._life;
+    const W = this.lifeW, L = this._life;
     const N = W * W;
     const byF = Object.create(null);
     // ① 收集盘面上所有出现过的棋子阵营（= BFS 源阵营）。空盘 → 无源 → 直接返回（全中立）。
@@ -819,7 +819,7 @@ export function installGoMode(World) {
    */
   P._goScoreChinese = function _goScoreChinese() {
     const g = this._goInit();
-    const W = World.LIFE_W, L = this._life;
+    const W = this.lifeW, L = this._life;
     const stoneByF = Object.create(null);
     for (let x = 0; x < W; x++) {
       for (let y = 0; y < W; y++) {
@@ -1103,7 +1103,7 @@ export function installGoMode(World) {
       phase: g.result ? 'over' : 'play',
       passes: g.passStreak || 0,
       passStreak: g.passStreak || 0,
-      boardW: World.LIFE_W,
+      boardW: this.lifeW,
       stonesPerTurn: this.stonesPerTurn,                                          // 每回合可落子数（房主可设，默认 3）
       stonesLeft: Math.max(0, this.stonesPerTurn - (g.placedThisTurn || 0)),      // 本回合还剩几颗可下
       breath: g._breathR,
