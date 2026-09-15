@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS rooms (
   victory_thresholds TEXT,      -- JSON: {"territoryRegions":16,...}
   -- 可编辑棋盘形状（房主设定；JSON: {w,h,shape}；旧库由 migrate() 补列；NULL = 回退默认矩形）
   board TEXT,
+  go_limits TEXT,               -- JSON: {maxMoves,turnMs,maxTimeouts}（go 模式限制）
   created_at INTEGER NOT NULL,
   closed_at INTEGER,
   FOREIGN KEY (owner_id) REFERENCES users(id)

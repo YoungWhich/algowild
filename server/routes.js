@@ -12,7 +12,7 @@ import { kickUser, onlineUserIds } from './net.js';
 import {
   createRoom, getRoom, attachWorld, closeRoom, roomInfo, listPublicRooms,
   verifyRoomPass, roomHub, MAX_PLAYERS, normStonesPerTurn, normLonelyDeathDelay,
-  normVictoryLines, normVictoryThresholds, normBoard, setRoomSettings,
+  normVictoryLines, normVictoryThresholds, normBoard, normGoLimits, setRoomSettings,
 } from './rooms.js';
 import {
   getInactiveDays, setInactiveDays, previewInactive, runInactivePurge, lastPurgeAt,
@@ -120,6 +120,7 @@ export function createRouter() {
       victoryThresholds: roomOpts && roomOpts.victoryThresholds,
       // 棋盘形状透传（重建路径同样不能丢）
       board: roomOpts && roomOpts.board,
+      goLimits: roomOpts && roomOpts.goLimits,
     });
     activeWorlds.set(row.id, w);
     worldModes.set(row.id, md);
@@ -140,6 +141,7 @@ export function createRouter() {
       stonesPerTurn: room.stonesPerTurn, lonelyDeathDelay: room.lonelyDeathDelay,
       victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds,
       board: room.board,
+      goLimits: room.goLimits,
     });
   }
 
@@ -242,6 +244,7 @@ export function createRouter() {
     const victoryLines = normVictoryLines(b.victoryLines, md);
     const victoryThresholds = normVictoryThresholds(b.victoryThresholds);
     const board = normBoard(b.board, md);
+    const goLimits = normGoLimits(b.goLimits);   // go 限制（手数上限 / 每手时限 / 超时判负次数）
     const w = new WorldEngine(id, req.user.id, sd, {
       mode: md,
       maxPlayers: b.maxPlayers,
@@ -251,13 +254,14 @@ export function createRouter() {
       victoryLines,
       victoryThresholds,
       board,
+      goLimits,
       // rts 出生点（自选 / 随机）；go 无出生点概念，此项对其无影响
       spawnMode: b.spawnMode,
       spawnXY: b.spawnXY,
     });
     activeWorlds.set(id, w);
     worldModes.set(id, md);
-    return res.json({ code: 0, message: 'ok', data: { worldId: id, seed: sd, mode: md, maxPlayers: w.maxPlayers, stonesPerTurn, lonelyDeathDelay, victoryLines, victoryThresholds, board } });
+    return res.json({ code: 0, message: 'ok', data: { worldId: id, seed: sd, mode: md, maxPlayers: w.maxPlayers, stonesPerTurn, lonelyDeathDelay, victoryLines, victoryThresholds, board, goLimits } });
   });
 
   router.get('/worlds/:id', authed, (req, res) => {
@@ -279,6 +283,7 @@ export function createRouter() {
           victoryLines: room.victoryLines,
           victoryThresholds: room.victoryThresholds,
           board: room.board,
+          goLimits: room.goLimits,
         };
       }
     } catch (e) { roomOpts = null; }
@@ -337,6 +342,7 @@ export function createRouter() {
         stonesPerTurn: b.stonesPerTurn, lonelyDeathDelay: b.lonelyDeathDelay,
         victoryLines: b.victoryLines, victoryThresholds: b.victoryThresholds,
         board: b.board,
+        goLimits: b.goLimits,
       });
       attachWorld(room, w.worldId, w.mode);
       // 房间设定的席位数同步到世界（电脑玩家同样占席位）
@@ -348,6 +354,7 @@ export function createRouter() {
         stonesPerTurn: room.stonesPerTurn, lonelyDeathDelay: room.lonelyDeathDelay,
         victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds,
         board: room.board,
+        goLimits: room.goLimits,
         room: roomInfo(room, req.user.id),
         invitePath: '/?room=' + room.code,
       } });
@@ -359,6 +366,7 @@ export function createRouter() {
       stonesPerTurn: b.stonesPerTurn, lonelyDeathDelay: b.lonelyDeathDelay,
       victoryLines: b.victoryLines, victoryThresholds: b.victoryThresholds,
       board: b.board,
+      goLimits: b.goLimits,
     });
     room.members.set(req.user.id, { name: req.user.username });
     return res.json({ code: 0, message: 'ok', data: {
@@ -366,6 +374,7 @@ export function createRouter() {
       stonesPerTurn: room.stonesPerTurn, lonelyDeathDelay: room.lonelyDeathDelay,
       victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds,
       board: room.board,
+      goLimits: room.goLimits,
       room: roomInfo(room, req.user.id), invitePath: '/?room=' + room.code,
     } });
   });
@@ -415,6 +424,7 @@ export function createRouter() {
       victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds,
       // 棋盘形状透传到世界（房间记录为权威）
       board: room.board,
+      goLimits: room.goLimits,
       // rts 出生点（自选 / 随机）；go 无出生点概念
       spawnMode: b.spawnMode, spawnXY: b.spawnXY,
     });
@@ -496,11 +506,14 @@ export function createRouter() {
     if (b.victoryLines !== undefined) patch.victoryLines = normVictoryLines(b.victoryLines, mode);
     if (b.victoryThresholds !== undefined) patch.victoryThresholds = normVictoryThresholds(b.victoryThresholds);
     if (boardTouched) patch.board = normBoard(b.board, mode);   // 显式传（含 null=回默认矩形）
+    // go 限制（显式传才更新；已开局后仍可改 —— 它不影响盘面合法性，只影响终局条件）
+    if (b.goLimits !== undefined) patch.goLimits = normGoLimits(b.goLimits);
     const updated = setRoomSettings(room.code, patch);
     return res.json({ code: 0, message: 'ok', data: {
       victoryLines: updated.victoryLines,
       victoryThresholds: updated.victoryThresholds,
       board: updated.board,
+      goLimits: updated.goLimits,
       availableLines: roomInfo(updated, req.user.id).availableLines,
       room: roomInfo(updated, req.user.id),
     } });

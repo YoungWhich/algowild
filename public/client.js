@@ -176,8 +176,38 @@ function roomOpts() {
     // 胜利条件（房主勾选；服务端按模式再 gate）
     victoryLines: collectVictoryLines('victory-lines-build-list', mode),
     // 棋盘形状（可编辑棋盘）：null = 默认矩形；否则为序列化三态位图字符串
-    board: collectBoard('board-build-editor'),
+    // ⚠️ 必须传编辑器实例（boardBuildEditor），传元素 id 会永远得到 null。
+    board: collectBoard(boardBuildEditor),
+    // 回合制限制（手数上限 / 每手时限 / 超时判负次数；服务端按模式再 gate 并钳制）
+    goLimits: collectGoLimits(),
   };
+}
+// 回合制限制：从建房弹窗读取（秒 → 毫秒）；非回合制模式返回 undefined（不落库，走服务端默认）。
+function collectGoLimits() {
+  const mode = ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts';
+  if (mode !== 'go') return undefined;
+  return {
+    maxMoves: clampInt($('golimits-moves') && $('golimits-moves').value, 20, 600, 150),
+    turnMs: clampInt($('golimits-turn') && $('golimits-turn').value, 5, 300, 30) * 1000,
+    maxTimeouts: clampInt($('golimits-timeouts') && $('golimits-timeouts').value, 1, 20, 3),
+  };
+}
+// 回合制限制的中文摘要（用于只读展示）。
+function goLimitsText(gl) {
+  const n = normGoLimitsClient(gl);
+  return `${n.maxMoves} 手 · 每手 ${Math.round(n.turnMs / 1000)} 秒 · 超时 ${n.maxTimeouts} 次判负`;
+}
+// 客户端侧归一（与服务端 World.normGoLimits 同规则；仅供展示，权威在服务端）。
+function normGoLimitsClient(v) {
+  const spec = {
+    maxMoves: { dflt: 150, lo: 20, hi: 600 },
+    turnMs: { dflt: 30000, lo: 5000, hi: 300000 },
+    maxTimeouts: { dflt: 3, lo: 1, hi: 20 },
+  };
+  const o = (v && typeof v === 'object') ? v : {};
+  const out = {};
+  for (const [k, s] of Object.entries(spec)) out[k] = clampInt(o[k], s.lo, s.hi, s.dflt);
+  return out;
 }
 // 整数钳制：非数字/空 → 默认；越界 → 钳到边界。
 function clampInt(v, min, max, dflt) {
@@ -656,6 +686,9 @@ function onModeChange() {
   renderVictoryLines('victory-lines-build-list', mode, cur, true);
   // 棋盘尺寸上限随模式变化（rts 32 / go 100）→ 重建编辑器
   buildBoardEditor(mode);
+  // 回合制限制区仅 go 模式显示
+  const glBox = $('golimits-build-adv');
+  if (glBox) glBox.style.display = (mode === 'go') ? '' : 'none';
 }
 if ($('room-vis')) $('room-vis').onchange = () => {
   const priv = $('room-vis').value === 'private';
@@ -730,6 +763,10 @@ function buildBoardEditor(mode) {
 if ($('board-build-canvas')) {
   buildBoardEditor(($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts');
 }
+// 回合制限制区：初始按当前模式显示/隐藏
+if ($('golimits-build-adv')) {
+  $('golimits-build-adv').style.display = (($('world-mode') && $('world-mode').value) === 'go') ? '' : 'none';
+}
 
 async function createRoomFlow() {
   const o = roomOpts();
@@ -790,6 +827,7 @@ if ($('quick-room')) $('quick-room').onclick = async () => {
       lonelyDeathDelay: clampInt($('room-delay') && $('room-delay').value, 0, 10, 0),
       victoryLines: collectVictoryLines('victory-lines-build-list', mode),
       board: collectBoard(boardBuildEditor),
+      goLimits: collectGoLimits(),
     });
     state.roomCode = r.code;
     state.mode = mode;
@@ -847,7 +885,8 @@ if ($('victory-edit')) $('victory-edit').onclick = async () => {
   if (!state.roomCode) { toast('先建房/进房'); return; }
   const info = state._roomInfo || await api('GET', `/api/rooms/${state.roomCode}`);
   const mode = info.mode === 'go' ? 'go' : 'rts';
-  $('modal-title').textContent = '编辑胜利条件（房主）';
+  $('modal-title').textContent = mode === 'go' ? '编辑胜利条件 / 回合制限制（房主）' : '编辑胜利条件（房主）';
+  const gl = normGoLimitsClient(info.goLimits);
   $('modal-body').innerHTML = `
     <div style="font-size:13px;line-height:1.6">
       <div style="color:#8b949e;font-size:12px;margin-bottom:6px">勾选本局启用的胜利条件（未勾选则不触发）</div>
@@ -855,6 +894,18 @@ if ($('victory-edit')) $('victory-edit').onclick = async () => {
       <div style="color:#6e7681;font-size:11px;margin-top:8px">
         开启一条当前已满足的线，将在下一拍即判定；本局无胜利条件（全不勾）时需手动结束。
       </div>
+      ${mode === 'go' ? `
+      <div style="margin-top:12px;padding-top:8px;border-top:1px solid #30363d">
+        <div style="color:#8b949e;font-size:12px;margin-bottom:6px">回合制限制（改后下一局/下一步即生效）</div>
+        <div class="row" style="align-items:center;gap:6px;flex-wrap:wrap">
+          <span style="font-size:11px;color:#8b949e">手数上限</span>
+          <input id="golimits-edit-moves" type="number" min="20" max="600" step="10" value="${gl.maxMoves}" style="flex:0 0 76px">
+          <span style="font-size:11px;color:#8b949e">每手秒数</span>
+          <input id="golimits-edit-turn" type="number" min="5" max="300" step="5" value="${Math.round(gl.turnMs / 1000)}" style="flex:0 0 76px">
+          <span style="font-size:11px;color:#8b949e">超时判负次数</span>
+          <input id="golimits-edit-timeouts" type="number" min="1" max="20" step="1" value="${gl.maxTimeouts}" style="flex:0 0 76px">
+        </div>
+      </div>` : ''}
     </div>`;
   renderVictoryLines('victory-lines-edit-list', mode, info.victoryLines, true);
   const ok = $('modal-ok');
@@ -871,11 +922,19 @@ if ($('victory-edit')) $('victory-edit').onclick = async () => {
   const onKey = (e) => { if (e.key === 'Escape') doClose(); };
   const onOk = async () => {
     const lines = collectVictoryLines('victory-lines-edit-list', mode);
+    const payload = { victoryLines: lines };
+    if (mode === 'go' && $('golimits-edit-moves')) {
+      payload.goLimits = {
+        maxMoves: clampInt($('golimits-edit-moves').value, 20, 600, 150),
+        turnMs: clampInt($('golimits-edit-turn').value, 5, 300, 30) * 1000,
+        maxTimeouts: clampInt($('golimits-edit-timeouts').value, 1, 20, 3),
+      };
+    }
     try {
-      const d = await api('PATCH', `/api/rooms/${state.roomCode}/settings`, { victoryLines: lines });
+      const d = await api('PATCH', `/api/rooms/${state.roomCode}/settings`, payload);
       state._roomInfo = d.room;
       renderLobby(d.room);
-      toast('✅ 已更新胜利条件');
+      toast('✅ 已更新设置');
       doClose();
     } catch (e) { toast('更新失败：' + e.message); }
   };
@@ -3146,9 +3205,10 @@ function renderGoHud() {
   // 少于上限也能随时结束回合（无"必须摆满"校验）。倒计时 ≤2s 且 k>0 时保护性自动提交。
   const stoneBudget = goStonesPerTurn();
   const pendingN = state.goPending ? state.goPending.length : 0;
-  // FIX-5：环形倒计时。按 msLeft/30000 推 stroke-dashoffset（CSS transition 由每帧重算保证平滑，
+  // FIX-5：环形倒计时。按 msLeft/每手时限 推 stroke-dashoffset（CSS transition 由每帧重算保证平滑，
   // 不使用 requestAnimationFrame —— 本项目渲染是 setInterval(render, 50)）。
-  const GO_TURN_MS = 30000;
+  // 时限由服务端下发（房主可配，默认 30000ms）；缺省回 30s。
+  const GO_TURN_MS = (g.turnMs && g.turnMs > 0) ? g.turnMs : 30000;
   const msLeft = Math.max(0, g.msLeft || 0);
   const frac = g.phase === 'over' ? 0 : Math.min(1, msLeft / GO_TURN_MS);
   const ringR = 9, ringC = 2 * Math.PI * ringR;

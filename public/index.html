@@ -159,6 +159,21 @@
           <div style="color:#6e7681;font-size:11px;margin-top:2px">图例：<span style="color:#3fb950">●可落子</span> / <span style="color:#8b949e">·形状外(墙)</span> / <span style="color:#f85149">✕虚空(墙)</span></div>
         </div>
       </details>
+      <details id="golimits-build-adv" style="margin-top:6px;font-size:12px;color:#aab">
+        <summary style="cursor:pointer;color:#ffd479">高级设置 · 回合制限制</summary>
+        <div style="margin-top:6px;padding:6px 8px;background:rgba(255,255,255,.03);border-radius:4px">
+          <div style="color:#8b949e;font-size:11px;margin-bottom:4px">仅回合制生效；改这些数值不会影响已落子的合法性，只决定终局条件</div>
+          <div class="row" style="align-items:center;gap:6px;flex-wrap:wrap">
+            <span style="font-size:11px;color:#8b949e">手数上限</span>
+            <input id="golimits-moves" type="number" min="20" max="600" step="10" value="150" style="flex:0 0 76px">
+            <span style="font-size:11px;color:#8b949e">每手秒数</span>
+            <input id="golimits-turn" type="number" min="5" max="300" step="5" value="30" style="flex:0 0 76px">
+            <span style="font-size:11px;color:#8b949e">超时判负次数</span>
+            <input id="golimits-timeouts" type="number" min="1" max="20" step="1" value="3" style="flex:0 0 76px">
+          </div>
+          <div id="golimits-build-info" style="color:#6e7681;font-size:11px;margin-top:4px"></div>
+        </div>
+      </details>
       <div class="row"><button id="create-room" class="primary" style="flex:1">建房</button></div>
       <div class="row" style="margin-top:6px">
         <button id="quick-room" style="flex:1;background:#238636;border-color:#238636;color:#fff">单人开局（1 人 + 3 电脑）</button>

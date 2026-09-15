@@ -68,6 +68,9 @@ export class World {
     this.victoryLines = World.normVictoryLines(opts && opts.victoryLines, this.mode);
     // victoryThresholds：rts 各线门槛（默认 = 原硬编码常量；go 不消费但仍透传存储）。
     this.victoryThresholds = World.normVictoryThresholds(opts && opts.victoryThresholds);
+    // ---- 房主可配的 go 限制（手数上限 / 每手时限 / 超时判负次数）----
+    // 构造器侧双保险：rooms.js 已归一，这里再取一次；缺省 → 全默认（与旧硬编码一致，行为不变）。
+    this.goLimits = World.normGoLimits(opts && opts.goLimits);
     // ---- 可编辑棋盘（形状 + 虚空格）----
     // 构造器侧双保险：rooms.js 已归一，这里再取一次；board=null → 全走现状矩形（零行为变化）。
     // 运行时层：this.board = 归一配置（供快照回显）；this._bmp = 编译后的位图（生命格粒度）。
@@ -1821,6 +1824,7 @@ export class World {
         // 胜利条件（房主可配置）：开关 + rts 门槛 + 该模式可用开关集。
         victoryLines: this.victoryLines,
         victoryThresholds: this.victoryThresholds,
+        goLimits: this.goLimits,
         availableLines: World.availableLines(this.mode),
         // 棋盘形状（房主可配置）：每帧下发小对象 {w,h,shape} 或 null（默认矩形）。绝不下发 100×100 数组。
         board: this.board,

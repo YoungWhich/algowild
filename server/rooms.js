@@ -112,6 +112,30 @@ export function availableVictoryLines(mode) {
   return mode === 'go' ? ['territory'] : ['territory', 'economy', 'singularity', 'survival'];
 }
 
+/**
+ * go 限制归一（手数上限 / 每手时限 / 超时判负次数）：转发引擎侧，保证单一事实源。
+ * @param {object|string|null|undefined} v
+ */
+export function normGoLimits(v) {
+  if (WorldEngine && typeof WorldEngine.normGoLimits === 'function') return WorldEngine.normGoLimits(v);
+  // 兜底（engine.js 未加载）：与引擎侧同规则的钳制。
+  const spec = {
+    maxMoves: { dflt: 150, lo: 20, hi: 600 },
+    turnMs: { dflt: 30000, lo: 5000, hi: 300000 },
+    maxTimeouts: { dflt: 3, lo: 1, hi: 20 },
+  };
+  let o = v;
+  if (typeof o === 'string') { try { o = JSON.parse(o); } catch (e) { o = null; } }
+  const out = {};
+  for (const [k, s] of Object.entries(spec)) {
+    const raw = (o && typeof o === 'object') ? o[k] : undefined;
+    const n = (typeof raw === 'number' && Number.isFinite(raw)) ? Math.floor(raw)
+      : (typeof raw === 'string' && Number.isFinite(Number(raw))) ? Math.floor(Number(raw)) : s.dflt;
+    out[k] = Math.max(s.lo, Math.min(s.hi, n));
+  }
+  return out;
+}
+
 // ---- 棋盘形状归一：转发给引擎侧静态方法（避免重复实现，保证单一事实源）----
 /**
  * 棋盘形状归一：非法/空/解析失败/行数或列数不符/全形状外 → null（回默认矩形）。
@@ -150,6 +174,8 @@ export async function createRoom(o) {
   const victoryThresholds = normVictoryThresholds(o.victoryThresholds);
   // 可编辑棋盘形状（房主设定；归一后写入 → DB 镜像 → 重建时透传）
   const board = normBoard(o.board, roomMode);
+  // go 限制（房主设定；手数上限 / 每手时限 / 超时判负次数）
+  const goLimits = normGoLimits(o.goLimits);
   const room = {
     code,
     ownerId: o.ownerId,
@@ -164,6 +190,7 @@ export async function createRoom(o) {
     victoryLines,
     victoryThresholds,
     board,
+    goLimits,
     worldId: '',
     // 大厅成员（世界尚未建立时也有人在房里等）——playerId -> { name }
     members: new Map(),
@@ -174,7 +201,7 @@ export async function createRoom(o) {
   try {
     roomsRepo.create(code, '', o.ownerId, room.maxPlayers, {
       visibility, passhash, name: room.name, mode: room.mode,
-      stonesPerTurn, lonelyDeathDelay, victoryLines, victoryThresholds, board,
+      stonesPerTurn, lonelyDeathDelay, victoryLines, victoryThresholds, board, goLimits,
     });
   } catch (e) { /* DB 镜像失败不影响内存房间 */ }
   return room;
@@ -197,6 +224,8 @@ function hydrate(row) {
     victoryThresholds: normVictoryThresholds(row.victory_thresholds),
     // 旧库缺列/为 NULL → null（回默认矩形）
     board: normBoard(row.board, row.mode || null),
+    // 旧库缺列/为 NULL → 回默认（与旧硬编码常量一致）
+    goLimits: normGoLimits(row.go_limits),
     worldId: row.world_id || '',
     members: new Map(),
     createdAt: row.created_at,
@@ -268,6 +297,9 @@ export function roomInfo(room, viewerId) {
   // 棋盘形状：世界为权威（建好后），否则房间记录，都没有则 null（回默认矩形）。
   const board = (w && w.board !== undefined) ? w.board
     : (room.board !== undefined ? room.board : null);
+  // go 限制：世界为权威（建好后），否则房间记录，都没有则回默认。
+  const goLimits = (ws.goLimits) ? ws.goLimits
+    : (room.goLimits || normGoLimits(null));
   return {
     code: room.code,
     name: room.name,
@@ -286,6 +318,8 @@ export function roomInfo(room, viewerId) {
     victoryThresholds,
     // 棋盘形状（房主可配置；{w,h,shape} 或 null=默认矩形）
     board,
+    // go 限制（房主可配置；手数上限 / 每手时限 / 超时判负次数）
+    goLimits,
     availableLines: availableVictoryLines(modeNow),
     humanCount: humans,
     aiCount: ais,
@@ -350,17 +384,22 @@ export function setRoomSettings(code, patch) {
   // 棋盘形状：显式传 board（含 null = 回默认矩形）才更新；未传则保留现状。
   const boardTouched = !!(patch && Object.prototype.hasOwnProperty.call(patch, 'board'));
   if (boardTouched) room.board = normBoard(patch.board, room.mode);
+  // go 限制：显式传 goLimits 才更新（归一后写回）；未传则保留现状。
+  const goLimitsTouched = !!(patch && Object.prototype.hasOwnProperty.call(patch, 'goLimits'));
+  if (goLimitsTouched) room.goLimits = normGoLimits(patch.goLimits);
   // 世界已建成 → 内存权威同步覆盖（下一次快照即生效）
   const w = roomWorld(room);
   if (w) {
     if (patch && patch.victoryLines) w.victoryLines = normVictoryLines(patch.victoryLines, w.mode);
     if (patch && patch.victoryThresholds) w.victoryThresholds = normVictoryThresholds(patch.victoryThresholds);
+    if (goLimitsTouched) w.goLimits = normGoLimits(room.goLimits);
     // 棋盘形状：重新编译世界内存位图（权威覆盖），下一次快照即见。
     if (boardTouched && typeof w._compileBoard === 'function') w._compileBoard(room.board);
   }
   try {
     const persist = { victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds };
     if (boardTouched) persist.board = room.board;
+    if (goLimitsTouched) persist.goLimits = room.goLimits;
     roomsRepo.setSettings(room.code, persist);
   } catch (e) { /* DB 镜像失败不影响内存房间 */ }
   return room;

@@ -29,14 +29,38 @@ export function installGoMode(World) {
 
   // ---------- 常量（挂在 World 上，供 engine / net / 测试统一引用） ----------
   World.GO_BOARD_W = 32;            // 默认棋盘边长（= World.LIFE_W）；自定义棋盘见 world.lifeW
-  World.GO_TURN_MS = 30000;         // 每手上限（毫秒）
-  World.GO_MAX_MOVES = 150;         // 手数上限
-  World.GO_PASS_END = 2;            // 连续 pass 终局
-  World.GO_MAX_TIMEOUTS = 3;        // 累计超时判负
+  World.GO_TURN_MS = 30000;         // 【默认值】每手时限；房主可配，运行时读 world.goLimits.turnMs
+  World.GO_MAX_MOVES = 150;         // 【默认值】手数上限；房主可配，运行时读 world.goLimits.maxMoves
+  World.GO_PASS_END = 2;            // 【遗留】连续 pass 终局；现规则为「全员各 pass 一次」，已不消费
+  World.GO_MAX_TIMEOUTS = 3;        // 累计超时判负（默认值；房主可配见 goLimits）
   World.GO_BREATH = [3, 4, 5];      // 影响半径呼吸取值（R ∈ {3,4,5}）
   World.GO_BREATH_EVERY = 10;       // 每 10 手呼吸一次
   World.GO_EVENT_EVERY = 25;        // 每 25 手世界事件一次
   World.GO_PATTERN_MAX_SIZE = 12;   // 图案奖：只检查团大小 ≤ 12 的团
+
+  // ---------- 房主可配的 go 限制（数值不再写死） ----------
+  // 每项 {dflt, lo, hi}；归一化只做「钳制 + 兜底默认」，非法值一律回默认。
+  World.GO_LIMIT_SPEC = {
+    maxMoves: { dflt: 150, lo: 20, hi: 600 },       // 手数上限（到上限即终局）
+    turnMs: { dflt: 30000, lo: 5000, hi: 300000 },  // 每手时限（毫秒，超时自动 pass）
+    maxTimeouts: { dflt: 3, lo: 1, hi: 20 },        // 累计超时判负次数
+  };
+  /**
+   * go 限制归一（纯函数，无随机）。非法 / 缺省 / 非对象 → 全默认。
+   * @param {object|string|null|undefined} v
+   * @returns {{maxMoves:number,turnMs:number,maxTimeouts:number}}
+   */
+  World.normGoLimits = function normGoLimits(v) {
+    let o = v;
+    if (typeof o === 'string') { try { o = JSON.parse(o); } catch (e) { o = null; } }
+    if (!o || typeof o !== 'object') o = {};
+    const out = {};
+    for (const k of Object.keys(World.GO_LIMIT_SPEC)) {
+      const s = World.GO_LIMIT_SPEC[k];
+      out[k] = World._clampInt(o[k], s.dflt, s.lo, s.hi);
+    }
+    return out;
+  };
 
   // ---------- 状态容器 ----------
 
@@ -864,7 +888,7 @@ export function installGoMode(World) {
     else { g.passes = 0; g.passStreak = 0; }
     let endReason = null;
     if (g.passStreak >= seats.length) endReason = 'pass';
-    else if (g.moveNo >= World.GO_MAX_MOVES) endReason = 'max_moves';
+    else if (g.moveNo >= this.goLimits.maxMoves) endReason = 'max_moves';
 
     // 吃光出局（"一条命"）：曾建立规模（≥ WIPE_ELIM_MIN_CELLS）后被清零 → 登记出局。
     // ⚠️ 用户拍板（VC-09/VC-10）：吃光**不算赢**（围棋真规则）。此处的 `wiped` 仅作为
@@ -883,7 +907,7 @@ export function installGoMode(World) {
     // 累计超时判负
     for (const pid of seats) {
       const p = this.players[pid];
-      if (p && (p.goTimeouts || 0) >= World.GO_MAX_TIMEOUTS && !endReason) endReason = 'timeout';
+      if (p && (p.goTimeouts || 0) >= this.goLimits.maxTimeouts && !endReason) endReason = 'timeout';
     }
     // 只剩一方未出局 → 触发终局（胜负仍由 _goFinish 数子排名决定，非"最后一人无条件胜"）
     const aliveSeats = seats.filter(pid => !(this.players[pid] && this.players[pid].lost));
@@ -963,7 +987,7 @@ export function installGoMode(World) {
     this.tick++;
     g.turnTicks++;
     // 超时 = 自动 pass（不做随机落子），并累计超时次数
-    if (g.turnTicks * 1000 >= World.GO_TURN_MS) {
+    if (g.turnTicks * 1000 >= this.goLimits.turnMs) {
       const pid = (g.seats && g.seats[g.turnIdx] != null) ? g.seats[g.turnIdx] : null;
       const p = pid != null ? this.players[pid] : null;
       if (p) p.goTimeouts = (p.goTimeouts || 0) + 1;
@@ -1098,8 +1122,9 @@ export function installGoMode(World) {
       // 兼容旧字段（两方局）
       blackId: g.blackId, whiteId: g.whiteId,
       moveNo: g.moveNo,
-      maxMoves: World.GO_MAX_MOVES,
-      msLeft: Math.max(0, World.GO_TURN_MS - g.turnTicks * 1000),
+      maxMoves: this.goLimits.maxMoves,
+      msLeft: Math.max(0, this.goLimits.turnMs - g.turnTicks * 1000),
+      turnMs: this.goLimits.turnMs,          // 每手时限总量（前端倒计时环按它算比例）
       phase: g.result ? 'over' : 'play',
       passes: g.passStreak || 0,
       passStreak: g.passStreak || 0,
