@@ -1813,6 +1813,10 @@ export class World {
     this._lifeInit();
     const players = Object.values(this.players);
     const tideRemaining = Math.max(0, this.tide.nextPhaseAt - this.tick);
+    // ⚠️ 顺序关键：go 快照会把「就近归属」网格写回 _lifeOwner（让底色与数子同口径），
+    //    而 lifeOwner 在下面**较早**就被序列化 —— 因此必须在构造返回对象前先算一次 go 状态，
+    //    否则序列化到的是旧的 Voronoi 底色（地图颜色会与结算对不上）。
+    const goState = this.mode === 'go' ? this._goSnapshotState() : null;
     return {
       worldId: this.worldId,
       tick: this.tick,
@@ -1854,8 +1858,7 @@ export class World {
       lifeW: this.lifeW,
       // factionId-1 => playerId, so the client can map grid values to colors
       lifeOwners: this._lifeOwners.slice(),
-      // Voronoi ownership of each life cell (faction id, 0 = neutral) — smooth,
-      // contestable borders the player sees and fights over.
+      // 势力归属：rts = Voronoi 影响力；go = 「就近归属」（由 _goSnapshotState 写回，与数子同口径）。
       lifeOwner: this._lifeOwner ? this._lifeOwner.map(c => Array.from(c)) : null,
       // 8x8 region ownership by faction id (0 = unowned)
       regionFaction: this._regionFaction.slice(),
@@ -1885,7 +1888,7 @@ export class World {
       lastTickedAt: this.lastTickedAt,
       // go 模式专属字段（rts 下为 null，零开销）。复用同一批 lifeGrid / lifeOwner /
       // lifeOwners / regionFaction 字段，客户端零改动即可显示棋子与势力底色。
-      go: this.mode === 'go' ? this._goSnapshotState() : null,
+      go: goState,
       // ---- 世界可见性：地形与资源点 ----
       // 之前只发 terrainSum/resourcesCount 两个数字，客户端根本画不出世界
       // （玩家看不见资源 → 不知道要干什么）。地形静态：低频重发；资源稀疏 + 每秒重算。

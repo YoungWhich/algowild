@@ -774,7 +774,7 @@ export function installGoMode(World) {
         if (v > 0) factions.add(v);
       }
     }
-    if (factions.size === 0) return { byF };
+    if (factions.size === 0) return { byF, grid: new Int8Array(N) };
     // ② 归属网格：bestDist[k] = 到最近棋子的步数（-1 = 尚未被任何阵营到达）；
     //    bestOwn[k] = 唯一归属阵营（0 = 中立：等距多阵营 / 不可达）。
     const bestDist = new Int16Array(N).fill(-1);
@@ -820,7 +820,18 @@ export function installGoMode(World) {
         }
       }
     }
-    // ③ 计分：归属非零的空点数（墙格非空点，天然被上面的 col[y] !== 0 排除）。
+    // ③ 归属网格（平铺 Int8Array，供前端绘制势力底色；**与计分同一口径**）：
+    //    棋子格 = 自身阵营；空点 = bestOwn（0=中立）；墙格 = 0。不计入 byF（byF 只数空点）。
+    const grid = new Int8Array(N);
+    for (let x = 0; x < W; x++) {
+      const col = L[x];
+      for (let y = 0; y < W; y++) {
+        const k = x * W + y;
+        const v = col[y];
+        grid[k] = (v > 0) ? v : bestOwn[k];
+      }
+    }
+    // ④ 计分：归属非零的空点数（墙格非空点，天然被上面的 col[y] !== 0 排除）。
     for (let x = 0; x < W; x++) {
       const col = L[x];
       for (let y = 0; y < W; y++) {
@@ -829,7 +840,7 @@ export function installGoMode(World) {
         if (o) byF[o] = (byF[o] || 0) + 1;
       }
     }
-    return { byF };
+    return { byF, grid };
   };
 
   /**
@@ -851,7 +862,7 @@ export function installGoMode(World) {
         if (v > 0) stoneByF[v] = (stoneByF[v] || 0) + 1;   // 子数（go 盘只有 1..8）
       }
     }
-    const { byF: emptyByF } = this._goNearestEmpty();      // 空点归属（就近归属 / 势力范围）
+    const { byF: emptyByF, grid: ownerGrid } = this._goNearestEmpty();  // 空点归属（就近归属 / 势力范围）
     const byF = Object.create(null);
     const keys = new Set([...Object.keys(stoneByF), ...Object.keys(emptyByF)]);
     for (const k of keys) byF[k] = (stoneByF[k] || 0) + (emptyByF[k] || 0);
@@ -869,7 +880,7 @@ export function installGoMode(World) {
         territory: byF[f] || 0,                              // 兼容别名字段（旧前端/旧代码）
       };
     }).sort((a, b) => b.score - a.score);
-    return { byF, black, white, stoneByF, emptyByF, ranked };
+    return { byF, black, white, stoneByF, emptyByF, ranked, ownerGrid };
   };
 
   // ---------- 回合状态机 / 终局 ----------
@@ -1092,6 +1103,17 @@ export function installGoMode(World) {
     const sc = g.result ? null : this._goScore();
     // 中国规则数子明细（子数 + 围住空点）。局中与终局都输出，供 UI 展示"吃光不算赢"。
     const chinese = this._goScoreChinese();
+    // 势力底色与数子**同口径**：把「就近归属」网格写回 _lifeOwner，
+    // 让前端的领地底色（读 lifeOwner）与最终得分归属一致 —— 否则地图颜色会与结算对不上。
+    // （_goScore 的 Voronoi 底色已不用于 go 的胜负判定，仅保留其返回值供旧字段兼容。）
+    if (chinese && chinese.ownerGrid && this._lifeOwner) {
+      const W = this.lifeW, src = chinese.ownerGrid;
+      for (let x = 0; x < W; x++) {
+        const oc = this._lifeOwner[x];
+        const base = x * W;
+        for (let y = 0; y < W; y++) oc[y] = src[base + y];
+      }
+    }
     const scs = g.result ? null : chinese;   // 局中 = 当前盘面数子；终局 = 用 result 里的快照
     const turnPid = (g.seats && g.seats[g.turnIdx] != null) ? g.seats[g.turnIdx] : null;
     const winnerName = g.result && g.result.winner != null

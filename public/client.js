@@ -619,7 +619,7 @@ const VICTORY_AVAILABLE = {
 };
 const VICTORY_LINE_DEFAULT = { territory: true, economy: false, singularity: false, survival: false };
 const VICTORY_LABEL = {
-  territory: { rts: '领土', go: '领土', descRts: '占满地图 16 区且进入帝国时代 → 胜', descGo: '双方停手后数子（子数+围住空点），多者胜' },
+  territory: { rts: '领土', go: '领土', descRts: '占满地图 16 区且进入帝国时代 → 胜', descGo: '双方停手后数子（子数 + 归属空点），多者胜' },
   economy: { rts: '经济', descRts: '领先 600 分并保持 90 秒 → 胜', descGo: '' },
   singularity: { rts: '采集', descRts: '六种资源各存满 30 → 胜', descGo: '' },
   survival: { rts: '灭族', descRts: '对手全部出局 → 胜', descGo: '' },
@@ -1165,20 +1165,20 @@ if (_goHelpBtn) _goHelpBtn.onclick = () => showGoRules();
 async function showGoRules() {
   await modal('规则速查 · 回合制 演化棋', `
     <div style="font-size:13px;line-height:1.7">
-      <b style="color:#ffd479">目标</b>：32×32 棋盘上，每回合可在任意空格落<b>多颗</b>子（默认 3，房主可设 1~16），按围棋规则提子，
-      随后全盘跑一步<b>康威演化</b>——你的细胞会自己往外长。手数上限 150，终局按<b>中国规则数子</b>（子数 + 围住的空点）多者胜。
+      <b style="color:#ffd479">目标</b>：在棋盘上（默认 32×32，房主可调至 100×100）每回合可在任意空格落<b>多颗</b>子（默认 3，房主可设 1~16），按围棋规则提子，
+      随后全盘跑一步<b>康威演化</b>——你的细胞会自己往外长。终局按<b>数子</b>（你的子数 + 归属你的空点）多者胜，不贴子。
       <div style="margin-top:8px"><b style="color:#ffd479">规则</b></div>
       ① <b>落子</b>：点任意空格即可（不限于邻接）；<b>每回合可落多颗</b>（默认 3，房主可设 1~16）。也可<b>不落子 / 少落子</b>——摆完点 <b>【结束回合】</b>即可生效；<b>0 颗直接点【结束回合】= 停一手（Pass）</b>，少于上限也能随时结束回合。<br>
       ② <b>提子</b>：正交 4 邻无气（无空点）的敌团被整团提掉；<b>禁自杀</b>；<b>劫</b>需先在他处应一手。<br>
       ③ <b>演化</b>：空格 8 邻恰好 3 个活细胞 → 诞生（阵营取邻域多数派，平票由种子掷定）；
       已有细胞 8 邻为 2~3 存活，否则死亡（<b>单颗、2 颗相邻都不足 2 邻，会被吃掉</b>）；房主可设<b>死亡宽限 N 回合</b>（默认 0，最多 10）才死。<br>
-      ④ <b>领地</b>：每格归属最近的棋子（Voronoi），影响半径 R 每 10 手"呼吸"变化（3/4/5），
-      领地边界会涨潮退潮。<br>
+      ④ <b>领地</b>：每个空点归「<b>离它最近的棋子</b>」那一方；两边一样近则该点<b>中立</b>。
+      <b>得分 = 你的棋子数 + 归属你的空点数</b>（不贴子）。棋盘底色就是这套归属，与结算口径一致。<br>
       ⑤ <b>世界事件</b>：每 25 手抽一个（繁盛 / 寒潮 / 拥挤突变），只改本回合演化参数。<br>
-      ⑥ <b>终局</b>：<b>双方连续停手</b>（Pass，即每方都点【结束回合】且不落子）后，按<b>中国规则数子</b>结算（自己的<b>子数 + 围住的空点数</b>，多者胜，不贴子）；此外 150 手 / 一方被吃光 / 认输 / 累计 3 次超时也会进入终局，胜者仍由数子决定。<b>吃光对方不算赢</b>。<br>
+      ⑥ <b>终局</b>：<b>双方连续停手</b>（Pass）后按数子结算；此外 <b>手数上限</b>（默认 150）、一方被吃光、认输、<b>累计超时</b>（默认 3 次）也会进入终局，胜者仍由数子决定。<b>吃光对方不算赢</b>。（手数上限与超时次数房主可设）<br>
       ⑦ <b>预览</b>：按 <kbd>Q</kbd> 开演化预览——会把本回合预选子也算进去（绿=将新生 / 红×=将死）。<br>
       <div style="margin-top:8px;color:#8b949e;font-size:12px">
-      每手 30 秒倒计时，超时自动停一手。同 seed + 手顺可完整复盘（逐手一致）。
+      每手倒计时（默认 30 秒，房主可设），超时自动停一手。同 seed + 手顺可完整复盘（逐手一致）。
       </div>
     </div>
   `);
@@ -1190,22 +1190,21 @@ async function showGoBriefing() {
   await modal('任务简报 · 回合制 演化棋（go）', `
     <div style="font-size:13px;line-height:1.7">
       <div style="color:#ffd479;margin-bottom:6px">🧩 你要干什么</div>
-      32×32 棋盘，黑白两方轮流落子。<b>终局比谁的地盘（目数）多</b>——
+      棋盘（默认 32×32，房主可调至 100×100），两方轮流落子。<b>终局比谁的地盘（数子）多</b>——
       你落下的子会自己往外长，抢到的空地才算你的。
       <div style="color:#ffd479;margin:10px 0 6px">🖱 怎么操作</div>
       ① <b>轮到你就点棋盘任意空格落子</b>（位置完全自由，不限于邻接）；<b>每回合可落多颗</b>（默认 3，房主可设 1~16）。点棋盘<b>只入预选、绝不提交</b>——摆完点 <b>【结束回合（k/N）】</b>才整批落下并演化。<b>也可以不落子或少落子</b>：直接点【结束回合】= 停一手（Pass），少于上限也能随时结束回合。左键点已有幽灵子可取消那一颗，右键/Esc 撤销最后一颗；倒计时 ≤2s 会保护性自动提交当回合预选。<br>
-      ② 键盘 <kbd>P</kbd> 停一手（pass）、<kbd>Q</kbd> 演化预览、<kbd>Ctrl</kbd>+<kbd>R</kbd> 认输；每手 30 秒超时自动 pass。<br>
+      ② 键盘 <kbd>P</kbd> 停一手（pass）、<kbd>Q</kbd> 演化预览、<kbd>Ctrl</kbd>+<kbd>R</kbd> 认输；每手倒计时（默认 30 秒，房主可设）超时自动 pass。<br>
       ③ 左上角 HUD 显示手数、行动方与倒计时；轮到你时棋盘边框会亮起。
       <div style="color:#ffd479;margin:10px 0 6px">↔ 跟实时模式（rts）有啥不一样</div>
       没有移动、没有资源、没有单位、<b>没有强弱棋子</b>——你只做"选一个点、点下去"这一件事。
       rts 是同时步 + 走位开枪；这里是<b>轮流落子 + 全盘演化</b>。
       <div style="color:#ffd479;margin:10px 0 6px">🌱 为什么不一样，还很深</div>
       每回合落子后<b>全盘跑一步康威演化</b>，你的子会自己往外长；
-      <b>谁先拓展到哪片空地，那片就归谁</b>（Voronoi 领地）。所以<b>先落子 = 占先机</b>，
+      <b>每个空点归离它最近的棋子那一方</b>（两边一样近则中立）——棋盘底色就是这套归属，与终局结算完全一致。所以<b>先落子 = 占先机</b>，
       后来者要落得更近、或吃掉它，才能翻盘。围棋提子（正交 4 邻无气即被提）、禁自杀、劫禁着在这里都生效。
       <div style="margin-top:10px;color:#8b949e;font-size:12px">
-      地盘边界每 10 手会整体涨落（影响半径 R 在 3/4/5 间"呼吸"）；每 25 手出现一次世界事件——
-      涨潮、寒潮、繁盛或不按常理的分裂。<b>内容不可预测，但同 seed + 手顺可完整复盘</b>。
+      每 25 手出现一次世界事件——涨潮、寒潮、繁盛或不按常理的分裂。<b>内容不可预测，但同 seed + 手顺可完整复盘</b>。
       </div>
       <div style="margin-top:12px">
         <button id="go-brief-rules" style="width:100%">📖 规则速查</button>
@@ -3228,7 +3227,6 @@ function renderGoHud() {
     `<span class="go-turn">${phaseTxt}</span>` +
     `<span style="display:inline-flex;align-items:center;gap:5px">${ringSvg}` +
       `<b style="color:${sec <= 5 ? '#ff6b6b' : '#ffd479'}">${g.phase === 'over' ? '—' : sec + 's'}</b></span>` +
-    `<span>R=<b>${g.breath || 3}</b><span class="dim">（第${g.nextBreathIn || 0}手呼吸）</span></span>` +
     `<span>事件 <b>${evCn}</b></span>` +
     `<span>本回合可落 <b>${stoneBudget}</b> 颗<span class="dim"> · 已预选 ${pendingN}</span></span>` +
     `<span style="margin-left:auto;display:inline-flex;gap:4px;flex-wrap:wrap;max-width:56%">${scoreHtml}</span>` +
