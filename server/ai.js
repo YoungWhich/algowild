@@ -119,7 +119,11 @@ export function makeAIPlayer(world, rng) {
   aiCounter = (aiCounter + 1) % 1000;
   const id = 'ai_' + (aiCounter + (world.tick || 0)) + '_' + Math.floor(rng() * 1e6);
   const name = AI_NAMES[Math.floor(rng() * AI_NAMES.length)] + '_' + (aiCounter + 1);
-  const [px, py] = pickSpawn(rng, Object.values(world.players));   // 四角散布
+  // 四角散布；形状感知：候选点须落在可落子世界格内（形状外/虚空剔除；board=null → 恒可落）。
+  const isValid = (x, y) => (world._isPlayableWorld ? world._isPlayableWorld(x, y) : true);
+  const sp = pickSpawn(rng, Object.values(world.players), 24, WORLD_W, WORLD_H, isValid);
+  const px = sp ? sp[0] : Math.floor(WORLD_W / 2);
+  const py = sp ? sp[1] : Math.floor(WORLD_H / 2);
   const p = {
     id, name, x: px, y: py, vx: 0, vy: 0, mass: 1,
     hp: 100, hpMax: 100,
@@ -157,6 +161,8 @@ function aiPathTo(world, p, gx, gy) {
     if (wx === gx && wy === gy) return false;
     if (wx < 0 || wy < 0 || wx >= WORLD_W || wy >= WORLD_H) return true;
     const { lx, ly } = world._lifeXY(wx, wy);
+    // 形状/虚空感知：墙格（形状外 / 虚空）不可通行（board=null → 恒 false，逐字节不变）。
+    if (world._isWall && world._isWall(lx, ly)) return true;
     const v = world._life[lx][ly];
     if (!_isStrong(v)) return false;
     return _factionOfCell(v) !== aiFaction;
@@ -516,6 +522,8 @@ function goCaptureAt(L, f, x, y, W) {
 export function goAIMove(world, f) {
   const W = GO_LIFE_W;
   const L = goLife(world);
+  // 形状/虚空感知：非矩形棋盘上，AI 只在「可落子」格选点（否则整批非法 → 被判 pass）。
+  const playable = (x, y) => !(world._isWall && world._isWall(x, y));
   // 本回合可落子数（房主可设，默认 3）；夹紧到 1..16，防越界或未初始化。
   const K = Math.max(1, Math.min(16, world.stonesPerTurn || 3));
   // 1) 候选点：邻接任意非空格（1~2 环）；空盘 → 天元附近
@@ -527,12 +535,13 @@ export function goAIMove(world, f) {
     for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) {
       const nx = x + dx, ny = y + dy;
       if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
-      if (!L[nx][ny]) cand.add(nx * W + ny);
+      if (!L[nx][ny] && playable(nx, ny)) cand.add(nx * W + ny);
     }
   }
   if (!any) {
     // 空盘：在天元附近摆一个紧凑小群落（≤K 颗，优先 2×2，可自发演化成稳定形），
     // 避免"一次只落一颗在空盘上→立刻因孤立而死"的退化。
+    // ★Q6=a 强制项：每个候选点都必须过 playable 过滤（空盘天元开局原 3 手里有 2 手会落在虚空/形状外）。
     const c = (W / 2) | 0;
     const OFFS = [
       [0, 0], [1, 0], [0, 1], [1, 1],
@@ -541,11 +550,23 @@ export function goAIMove(world, f) {
       [1, 2], [2, 2], [-2, 0], [0, -2],
     ];
     const moves = [];
+    // 首选偏移（尽可能摆成紧凑形）；若被形状挡住，则退化为"扫描全盘找可落子格"。
     for (const [dx, dy] of OFFS) {
       if (moves.length >= K) break;
       const nx = c + dx, ny = c + dy;
       if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
+      if (!playable(nx, ny)) continue;
       moves.push({ lx: nx, ly: ny });
+    }
+    if (moves.length < K) {
+      // 兜底：全盘扫描补足到 K 颗（确定性：按 x*W+y 升序）。
+      for (let x = 0; x < W && moves.length < K; x++) {
+        for (let y = 0; y < W && moves.length < K; y++) {
+          if (!playable(x, y)) continue;
+          if (moves.some(m => m.lx === x && m.ly === y)) continue;
+          moves.push({ lx: x, ly: y });
+        }
+      }
     }
     return { moves };
   }
@@ -556,6 +577,7 @@ export function goAIMove(world, f) {
   for (const key of cand) {
     const x = (key / W) | 0, y = key % W;
     if (L[x][y]) continue;
+    if (!playable(x, y)) continue;      // 形状/虚空感知：不进墙格
     // 提子数（含能否自救）
     const cap = goCaptureAt(L, f, x, y, W);
     // 落子后气数

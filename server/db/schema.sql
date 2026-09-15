@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS rooms (
   -- 胜利条件（房主设定；JSON 串；旧库由 migrate() 补列；NULL = 回退默认）
   victory_lines TEXT,           -- JSON: {"territory":true,"economy":false,...}
   victory_thresholds TEXT,      -- JSON: {"territoryRegions":16,...}
+  -- 可编辑棋盘形状（房主设定；JSON: {w,h,shape}；旧库由 migrate() 补列；NULL = 回退默认矩形）
+  board TEXT,
   created_at INTEGER NOT NULL,
   closed_at INTEGER,
   FOREIGN KEY (owner_id) REFERENCES users(id)

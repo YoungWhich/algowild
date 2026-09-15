@@ -66,6 +66,16 @@ export class World {
     this.victoryLines = World.normVictoryLines(opts && opts.victoryLines, this.mode);
     // victoryThresholds：rts 各线门槛（默认 = 原硬编码常量；go 不消费但仍透传存储）。
     this.victoryThresholds = World.normVictoryThresholds(opts && opts.victoryThresholds);
+    // ---- 可编辑棋盘（形状 + 虚空格）----
+    // 构造器侧双保险：rooms.js 已归一，这里再取一次；board=null → 全走现状矩形（零行为变化）。
+    // 运行时层：this.board = 归一配置（供快照回显）；this._bmp = 编译后的位图（生命格粒度）。
+    this._compileBoard(opts && opts.board);
+    // rts 出生点模式（R7/BE-12）：'random'（默认，离其他玩家最远）| 'pick'（自选坐标）。
+    // go 模式无出生点概念（纯轮流落子），这两项对其无影响。
+    this._spawnMode = (opts && opts.spawnMode === 'pick') ? 'pick' : 'random';
+    const sxy = opts && opts.spawnXY;
+    this._spawnXY = (sxy && Number.isFinite(sxy.x) && Number.isFinite(sxy.y))
+      ? { x: Math.floor(sxy.x), y: Math.floor(sxy.y) } : null;
     this._rng = mulberry32(this.seed);
     this.tick = 0;
     this.oxic = false;   // 世界含氧量：无氧纪（发酵）→ 大氧化事件 → 有氧纪（生物呼吸的能源革命）
@@ -108,7 +118,10 @@ export class World {
   _genResources() {
     const r = Array.from({ length: WORLD_W }, () => new Array(WORLD_H).fill(0));
     const rng = this._rng;
+    // 形状感知：board=null → 无条件全图填充（与现状逐字节一致）；
+    // board 非空 → 形状外/虚空的格子不生成资源（世界格映射到生命格后判墙）。
     for (let x = 0; x < WORLD_W; x++) for (let y = 0; y < WORLD_H; y++) {
+      if (this._bmp && !this._isPlayableWorld(x, y)) continue;
       const t = this.terrain[x][y];
       if (t === TERRAIN.FOREST && rng() < 0.10) r[x][y] = RESOURCE.WOOD;
       else if (t === TERRAIN.MOUNTAIN && rng() < 0.075) r[x][y] = RESOURCE.STONE;
@@ -149,8 +162,24 @@ export class World {
       return existing;
     }
     if (!this.canAcceptHuman()) return { rejected: 'room_full' };
-    // 出生点：远离已有玩家，让多方从地图四角各自发展、中盘相遇
-    const [px, py] = pickSpawn(this._rng, Object.values(this.players));
+    // 出生点：远离已有玩家，让多方从地图四角各自发展、中盘相遇。
+    // 形状感知：候选点必须落在「可落子」世界格内（形状外 / 虚空被剔除）。
+    // R7/BE-12：支持「自选」出生点（this._spawnMode === 'pick' + spawnXY），非法坐标 → 回退随机。
+    const isValid = (x, y) => this._isPlayableWorld(x, y);
+    let px, py;
+    if (this._spawnMode === 'pick' && this._spawnXY
+        && Number.isFinite(this._spawnXY.x) && Number.isFinite(this._spawnXY.y)
+        && this._isPlayableWorld(Math.floor(this._spawnXY.x), Math.floor(this._spawnXY.y))) {
+      px = Math.max(0, Math.min(WORLD_W - 1, Math.floor(this._spawnXY.x)));
+      py = Math.max(0, Math.min(WORLD_H - 1, Math.floor(this._spawnXY.y)));
+    } else {
+      const sp = pickSpawn(this._rng, Object.values(this.players), 24, WORLD_W, WORLD_H, isValid);
+      if (sp) { px = sp[0]; py = sp[1]; }
+      else {
+        // 形状内无可落子格（理论不会，normBoard 已保证至少一格）→ 回退地图中心。
+        px = Math.floor(WORLD_W / 2); py = Math.floor(WORLD_H / 2);
+      }
+    }
     const p = {
       id: playerId, name, x: px, y: py, vx: 0, vy: 0, mass: 1,
       hp: 100, hpMax: 100,
@@ -255,6 +284,8 @@ export class World {
       const x = Math.max(0, Math.min(WORLD_W - 1, Math.round(px + Math.cos(a) * r)));
       const y = Math.max(0, Math.min(WORLD_H - 1, Math.round(py + Math.sin(a) * r)));
       const resCode = World._STOCK_TO_RES[types[i]];
+      // 形状感知：不把出生资源撒到形状外 / 虚空（board=null → 恒可落，逐字节不变）。
+      if (this._bmp && !this._isPlayableWorld(x, y)) continue;
       // Only place if the cell is empty (don't overwrite naturally-generated terrain resources)
       if (this.resources[x] && !this.resources[x][y]) {
         this.resources[x][y] = resCode;
@@ -665,10 +696,20 @@ export class World {
     for (let i = 0; i < burst; i++) {
       const side = (i + this.tick) & 3; // 0/1/2/3
       let sx, sy;
-      if (side === 0) { sx = 0; sy = this._rng() * WORLD_H; }
-      else if (side === 1) { sx = WORLD_W - 1; sy = this._rng() * WORLD_H; }
-      else if (side === 2) { sx = this._rng() * WORLD_W; sy = 0; }
-      else { sx = this._rng() * WORLD_W; sy = WORLD_H - 1; }
+      // 形状感知：board=null → 沿用原边缘生成（逐字节不变）；board 非空 → 边缘点若落在墙内，
+      // 沿该边重试命中可通行点（形状外/虚空不生成潮汐）；仍失败 → 换到中心附近可通行点。
+      let ok = false;
+      for (let attempt = 0; attempt < 8 && !ok; attempt++) {
+        if (side === 0) { sx = (attempt === 0 ? 0 : attempt); sy = this._rng() * WORLD_H; }
+        else if (side === 1) { sx = WORLD_W - 1 - (attempt === 0 ? 0 : attempt); sy = this._rng() * WORLD_H; }
+        else if (side === 2) { sx = this._rng() * WORLD_W; sy = (attempt === 0 ? 0 : attempt); }
+        else { sx = this._rng() * WORLD_W; sy = WORLD_H - 1 - (attempt === 0 ? 0 : attempt); }
+        ok = this._isPlayableWorld(Math.floor(sx), Math.floor(sy));
+      }
+      if (!ok) {
+        sx = WORLD_W / 2; sy = WORLD_H / 2;
+        if (this._bmp && !this._isPlayableWorld(Math.floor(sx), Math.floor(sy))) continue; // 形状外 → 放弃本次生成
+      }
       const type = hostileTypes[(i + this.tick) % hostileTypes.length];
       const isBoss = boss && i === 0;
       const e = {
@@ -764,6 +805,201 @@ export class World {
   }
   // 棋子近战吞噬：强细胞累积到该伤害即被击碎。
   static CELL_ATK_HP = 3;
+  // ==================== 可编辑棋盘（形状 + 虚空格）· 单一事实源 ====================
+  // 每格三态：0 = 形状外（棋盘之外）；1 = 可落子（形状内）；2 = 虚空格（形状内的"墙"）。
+  // 语义（唯一契约）：0 与 2 在「不可落子 / 不计气 / 阻断连通 / 不参与计分」上**完全等价**，
+  // 差异只存在于渲染/编辑器（UI 用不同色/底纹区分，见 Q1=a）。所有边界判定统一走 World.isWall。
+  static SHAPE_OUT = 0;
+  static SHAPE_PLAY = 1;
+  static SHAPE_VOID = 2;
+  /** 字符 → 三态值（序列化用）。'.'=形状外 '#'=可落子 'x'=虚空。 */
+  static SHAPE_CHARS = { '.': 0, '#': 1, 'x': 2 };
+  /** 三态值 → 字符（编码用）。索引即取值。 */
+  static SHAPE_CHARS_INV = ['.', '#', 'x'];
+  /** 画布尺寸上限 / 下限（方格数）。 */
+  static BOARD_MAX = 100;
+  static BOARD_MIN = 1;
+  /**
+   * 唯一墙判定纯函数：(lx,ly) 是否「不可落子 / 墙」——越界 ∪ 形状外 ∪ 虚空 → true。
+   * bmp 为 null（未配置棋盘）时**逐字节等价于现状矩形越界判定**（不回归的底线）。
+   * @param {Uint8Array|null} bmp 生命格粒度位图（行优先 bmp[ly*w+lx]，值 ∈ {0,1,2}）
+   * @param {number} w 位图宽 @param {number} h 位图高
+   * @param {number} lx @param {number} ly 生命格坐标
+   * @returns {boolean}
+   */
+  static isWall(bmp, w, h, lx, ly) {
+    if (lx < 0 || ly < 0 || lx >= w || ly >= h) return true;
+    return bmp[ly * w + lx] !== World.SHAPE_PLAY;   // 0 或 2 → 墙
+  }
+  /**
+   * 编码：{w,h,grid} → 紧凑串（行优先，'/' 分行，'.'/'#'/'x'）。grid[ly][lx] ∈ {0,1,2}。
+   * @returns {string}
+   */
+  static encodeBoard(w, h, grid) {
+    const rows = [];
+    for (let ly = 0; ly < h; ly++) {
+      let s = '';
+      for (let lx = 0; lx < w; lx++) s += World.SHAPE_CHARS_INV[grid[ly][lx]] || '.';
+      rows.push(s);
+    }
+    return rows.join('/');
+  }
+  /**
+   * 解码：{w,h,shape} 紧凑串 → Uint8Array(w*h)（行优先 bmp[ly*w+lx]）。非法字符 → 形状外(0)。
+   * @param {{w:number,h:number,shape:string}} cfg
+   * @returns {Uint8Array}
+   */
+  static decodeBoard(cfg) {
+    const w = cfg.w, h = cfg.h;
+    const out = new Uint8Array(w * h);
+    const rows = String(cfg.shape).split('/');
+    for (let ly = 0; ly < h; ly++) {
+      const row = rows[ly] || '';
+      for (let lx = 0; lx < w; lx++) out[ly * w + lx] = World.SHAPE_CHARS[row[lx]] ?? 0;
+    }
+    return out;
+  }
+  /**
+   * 棋盘形状归一（唯一实现；rooms.js 只转发，避免环依赖）。
+   * 非法 / null / '' / 解析失败 / 行数或列数不符 / 全形状外 → null（回现状矩形）。
+   * 字符合法性：非法字符宽容地视为形状外（不整体回默认）；但若没有任何可落子格 → 回默认。
+   * @param {object|string|null|undefined} v {w,h,shape} 或 JSON 串
+   * @param {('rts'|'go'|null|undefined)} mode  （不做差异化：go/rts 都能用形状）
+   * @returns {{w:number,h:number,shape:string}|null}
+   */
+  static normBoard(v, mode) {
+    void mode;
+    let o = v;
+    if (typeof o === 'string') { try { o = JSON.parse(o); } catch (e) { return null; } }
+    if (!o || typeof o !== 'object') return null;                    // E1/E12：无 shape → 默认矩形
+    const w = World._clampInt(o.w, 0, World.BOARD_MIN, World.BOARD_MAX);
+    const h = World._clampInt(o.h, 0, World.BOARD_MIN, World.BOARD_MAX);
+    if (!Number.isInteger(w) || !Number.isInteger(h) || w < World.BOARD_MIN || h < World.BOARD_MIN) return null;
+    const shape = String(o.shape == null ? '' : o.shape);
+    const rows = shape.split('/');
+    if (rows.length !== h) return null;                              // 行数不符 → 回默认
+    for (const r of rows) if (r.length !== w) return null;           // 列数不符 → 回默认
+    let hasPlay = false;
+    for (const r of rows) for (const c of r) if (c === '#') { hasPlay = true; break; }
+    if (!hasPlay) return null;                                       // E3：全形状外/全虚空 → 默认
+    return { w, h, shape };
+  }
+  // ---- 预设模板（静态几何纯函数；islands 走 mulberry32 种子 rng，禁 Math.random）----
+  /** 全可落子（经典矩形）。 */
+  static _fillRect(w, h) {
+    const g = [];
+    for (let ly = 0; ly < h; ly++) { const r = []; for (let lx = 0; lx < w; lx++) r.push(1); g.push(r); }
+    return g;
+  }
+  /** 十字：横竖两条臂（臂宽 = 居中 1/3 带，四角挖空）。 */
+  static _genCross(w, h) {
+    const g = World._fillRect(w, h);
+    const bw = Math.max(1, Math.floor(w / 3));
+    const bh = Math.max(1, Math.floor(h / 3));
+    const x0 = Math.floor((w - bw) / 2), x1 = x0 + bw - 1;
+    const y0 = Math.floor((h - bh) / 2), y1 = y0 + bh - 1;
+    for (let ly = 0; ly < h; ly++) for (let lx = 0; lx < w; lx++) {
+      const inX = lx >= x0 && lx <= x1, inY = ly >= y0 && ly <= y1;
+      g[ly][lx] = (inX || inY) ? 1 : 0;              // 十字臂内可落子，四角为形状外
+    }
+    return g;
+  }
+  /** 城堡：矩形外框（厚墙）+ 内部庭院（可落子），四角留塔。 */
+  static _genCastle(w, h) {
+    const g = World._fillRect(w, h);
+    const t = Math.max(1, Math.floor(Math.min(w, h) / 6));   // 墙厚
+    for (let ly = 0; ly < h; ly++) for (let lx = 0; lx < w; lx++) {
+      const edge = lx < t || ly < t || lx >= w - t || ly >= h - t;
+      if (edge) g[ly][lx] = 1;                       // 外框（城墙）可落子
+      else g[ly][lx] = 2;                            // 内庭挖成虚空（"护城河"）
+    }
+    // 四角塔（4×4）恢复为可落子，制造"据点感"
+    const k = Math.min(t + 1, Math.floor(Math.min(w, h) / 4));
+    for (let ly = 0; ly < k; ly++) for (let lx = 0; lx < k; lx++) {
+      g[ly][lx] = 1;
+      g[ly][w - 1 - lx] = 1;
+      g[h - 1 - ly][lx] = 1;
+      g[h - 1 - ly][w - 1 - lx] = 1;
+    }
+    return g;
+  }
+  /** 双岛：左半与右半两个矩形岛，中间竖带为形状外（隔断）。 */
+  static _genTwins(w, h) {
+    const g = World._fillRect(w, h);
+    const gap = Math.max(1, Math.floor(w / 6));      // 中间隔断带
+    const gx0 = Math.floor((w - gap) / 2), gx1 = gx0 + gap - 1;
+    const m = Math.max(1, Math.floor(w / 8));         // 岛与边缘留空
+    for (let ly = 0; ly < h; ly++) for (let lx = 0; lx < w; lx++) {
+      const inGap = lx >= gx0 && lx <= gx1;
+      const onIsland = (lx >= m && lx < gx0) || (lx > gx1 && lx < w - m);
+      const onRow = ly >= m && ly < h - m;
+      g[ly][lx] = (!inGap && onIsland && onRow) ? 1 : 0;
+    }
+    return g;
+  }
+  /** 回字：外环可落子，内圈挖成虚空（中空），再内可选中心小块。 */
+  static _genRing(w, h) {
+    const g = World._fillRect(w, h);
+    const t = Math.max(1, Math.floor(Math.min(w, h) / 5));   // 环厚
+    for (let ly = 0; ly < h; ly++) for (let lx = 0; lx < w; lx++) {
+      const edge = lx < t || ly < t || lx >= w - t || ly >= h - t;
+      g[ly][lx] = edge ? 1 : 2;                       // 边缘环可落子，内圈虚空
+    }
+    return g;
+  }
+  /**
+   * 随机岛屿：种子 rng（mulberry32）生成块状可落子区 + 部分内部虚空。
+   * 确定性：同 seed + 同尺寸 → 同形状（禁 Math.random / Date.now）。
+   * @param {number} w @param {number} h @param {number} seed
+   */
+  static _genIslands(w, h, seed) {
+    const rng = mulberry32((Number.isInteger(seed) && seed) ? seed : 1);
+    const g = World._fillRect(w, h);
+    // 先全置形状外，再用若干"团块"填充可落子格
+    for (let ly = 0; ly < h; ly++) for (let lx = 0; lx < w; lx++) g[ly][lx] = 0;
+    const blobs = Math.max(3, Math.round((w + h) / 8));
+    for (let b = 0; b < blobs; b++) {
+      const cx = Math.floor(rng() * w), cy = Math.floor(rng() * h);
+      const r = 1 + Math.floor(rng() * Math.max(1, Math.min(w, h) / 5));
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (dx * dx + dy * dy > r * r) continue;
+        const x = cx + dx, y = cy + dy;
+        if (x >= 0 && y >= 0 && x < w && y < h) g[y][x] = 1;
+      }
+    }
+    // 内部随机挖虚空（约 12% 可落子格）——同样走种子 rng
+    for (let ly = 0; ly < h; ly++) for (let lx = 0; lx < w; lx++) {
+      if (g[ly][lx] === 1 && rng() < 0.12) g[ly][lx] = 2;
+    }
+    // 兜底：若无任何可落子格 → 回退整块矩形（保证 normBoard 不会拒绝）
+    let hasPlay = false;
+    for (let ly = 0; ly < h && !hasPlay; ly++) for (let lx = 0; lx < w; lx++) if (g[ly][lx] === 1) { hasPlay = true; break; }
+    if (!hasPlay) return World._fillRect(w, h);
+    return g;
+  }
+  /** 预设模板表：id → { label, gen(w,h,seed) → grid }。gen 返回 grid[ly][lx] ∈ {0,1,2}。 */
+  static BOARD_PRESETS = {
+    rect:    { label: '经典矩形', gen: (w, h) => World._fillRect(w, h) },
+    cross:   { label: '十字',     gen: (w, h) => World._genCross(w, h) },
+    castle:  { label: '城堡',     gen: (w, h) => World._genCastle(w, h) },
+    twins:   { label: '双岛',     gen: (w, h) => World._genTwins(w, h) },
+    ring:    { label: '回字',     gen: (w, h) => World._genRing(w, h) },
+    islands: { label: '随机岛屿', gen: (w, h, seed) => World._genIslands(w, h, seed) },
+  };
+  /**
+   * 生成某预设的形状配置（归一后）。非法 id → 回退经典矩形。
+   * @param {string} id
+   * @param {number} w @param {number} h @param {number} [seed]
+   * @returns {{w:number,h:number,shape:string}|null}
+   */
+  static presetBoard(id, w, h, seed) {
+    const p = World.BOARD_PRESETS[id] || World.BOARD_PRESETS.rect;
+    const cw = World._clampInt(w, 0, World.BOARD_MIN, World.BOARD_MAX);
+    const ch = World._clampInt(h, 0, World.BOARD_MIN, World.BOARD_MAX);
+    if (!cw || !ch) return null;
+    const grid = p.gen(cw, ch, seed);
+    return World.normBoard({ w: cw, h: ch, shape: World.encodeBoard(cw, ch, grid) }, null);
+  }
   // 把可空值收敛为 [lo,hi] 的整数，非法输入回落到默认值。
   static _clampInt(v, dflt, lo, hi) {
     const n = (typeof v === 'number' && Number.isFinite(v)) ? Math.floor(v) : dflt;
@@ -850,6 +1086,45 @@ export class World {
       this._lifeDmg = Array.from({ length: World.LIFE_W }, () => new Int8Array(World.LIFE_W));
     }
   }
+  // ---- 可编辑棋盘：编译 / 墙判定（生命格粒度）----
+  /**
+   * 编译棋盘配置为运行时位图。board 非法/为 null → 全走现状矩形（this.board=null, this._bmp=null）。
+   * @param {object|string|null|undefined} raw 已归一或原始 board
+   */
+  _compileBoard(raw) {
+    const cfg = World.normBoard(raw, this.mode);
+    this._boardRev = (this._boardRev || 0) + 1;   // 形状变更版本号（低频下发用）
+    this._boardMapSentRev = null;
+    if (!cfg) { this.board = null; this._boardW = null; this._boardH = null; this._bmp = null; return; }
+    this.board = cfg;
+    this._boardW = cfg.w;
+    this._boardH = cfg.h;
+    this._bmp = World.decodeBoard(cfg);
+  }
+  /**
+   * 实例墙判定便捷法（go/rts 统一用生命格坐标）。
+   * board=null 时**逐字节等价**于现状 `lx<0||ly<0||lx>=LIFE_W||ly>=LIFE_W`（不回归底线）。
+   * @param {number} lx @param {number} ly
+   * @returns {boolean}
+   */
+  _isWall(lx, ly) {
+    if (this._bmp) return World.isWall(this._bmp, this._boardW, this._boardH, lx, ly);
+    return lx < 0 || ly < 0 || lx >= World.LIFE_W || ly >= World.LIFE_W;
+  }
+  /** (lx,ly) 是否可落子（= 非墙）。 */
+  _isPlayable(lx, ly) { return !this._isWall(lx, ly); }
+  /**
+   * 世界坐标 → 是否可通行（rts 世界格粒度；board=null → 恒 true）。
+   * 世界格映射到生命格后判墙，仅用于生成物/出生点/寻路的形状感知。
+   * @param {number} wx @param {number} wy 世界格坐标
+   * @returns {boolean}
+   */
+  _isPlayableWorld(wx, wy) {
+    if (!this._bmp) return true;
+    if (wx < 0 || wy < 0 || wx >= WORLD_W || wy >= WORLD_H) return false;
+    const { lx, ly } = this._lifeXY(wx, wy);
+    return this._isPlayable(lx, ly);
+  }
   _factionOf(playerId) {
     this._lifeInit();
     let i = this._lifeOwners.indexOf(playerId);
@@ -886,7 +1161,7 @@ export class World {
     for (let dx = -r; dx <= r; dx++) {
       for (let dy = -r; dy <= r; dy++) {
         const nx = lx + dx, ny = ly + dy;
-        if (nx < 0 || ny < 0 || nx >= World.LIFE_W || ny >= World.LIFE_W) continue;
+        if (this._isWall(nx, ny)) continue;
         // Never paint a trail over an existing strong cell (yours or an enemy's)
         if (World._isStrong(this._life[nx][ny])) continue;
         this._life[nx][ny] = f + 10;
@@ -901,6 +1176,8 @@ export class World {
     this._lifeInit();
     const { lx, ly } = this._lifeXY(p.x, p.y);
     const f = this._factionOf(p.id);
+    // 形状/虚空感知：目标格非可落子（形状外 / 虚空）→ 拒绝落子（不消耗种子）。
+    if (this._isWall(lx, ly)) return null;
     const v = this._life[lx][ly];
     // 不覆盖敌方强细胞（保留博弈空间）
     if (World._isStrong(v) && World._factionOfCell(v) !== f) return null;
@@ -923,6 +1200,9 @@ export class World {
     const doomNext = Array.from({ length: W }, () => new Int8Array(W).fill(-1));
     for (let x = 0; x < W; x++) {
       for (let y = 0; y < W; y++) {
+        // 形状/虚空感知（★必须新增段落）：格子自身若是「虚空 / 形状外」→ next=0 且永不诞生，
+        // 否则邻近细胞会在 n===3 时把棋盘外的格"诞生"出棋子。board=null 时该分支不进入（逐字节不变）。
+        if (this._bmp && this._isWall(x, y)) { next[x][y] = 0; doomNext[x][y] = -1; continue; }
         const raw = this._life[x][y];
         const curF = World._factionOfCell(raw);
         let n = 0;
@@ -932,7 +1212,7 @@ export class World {
           for (let dy = -1; dy <= 1; dy++) {
             if (!dx && !dy) continue;
             const nx = x + dx, ny = y + dy;
-            if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
+            if (this._isWall(nx, ny)) continue;
             const v = this._life[nx][ny];
             if (!v) continue;
             n++;
@@ -1012,7 +1292,7 @@ export class World {
         const atkF = World._factionOfCell(atkVal);
         for (const [dx, dy] of dir8) {
           const nx = x + dx, ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
+          if (this._isWall(nx, ny)) continue;
           const v = L[nx][ny];
           if (!World._isTrail(v)) continue;         // 只吞噬弱痕
           const tf = v - 10;
@@ -1042,7 +1322,7 @@ export class World {
         let atkIn = 0;
         for (const [dx, dy] of dir8) {
           const nx = x + dx, ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
+          if (this._isWall(nx, ny)) continue;
           const v = L[nx][ny];
           if (World._isStrong(v) && v !== defF) atkIn++;
         }
@@ -1101,7 +1381,7 @@ export class World {
         comp.push([cx, cy]);
         for (const [dx, dy] of dir4) {
           const nx = cx + dx, ny = cy + dy;
-          if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
+          if (this._isWall(nx, ny)) continue;
           if (!seen[nx][ny] && L[nx][ny] === v) { seen[nx][ny] = 1; stack.push([nx, ny]); }
         }
       }
@@ -1111,7 +1391,7 @@ export class World {
       for (const [cx, cy] of comp) {
         for (const [dx, dy] of dir8) {
           const nx = cx + dx, ny = cy + dy;
-          if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
+          if (this._isWall(nx, ny)) continue;
           const nv = L[nx][ny];
           if (nv === 0) libs++;               // 空格 = 气
           else if (nv === v) libs++;          // 己方细胞 = 气（不算自杀）
@@ -1261,7 +1541,7 @@ export class World {
     const sites = [];
     for (let x = 0; x < W; x++) for (let y = 0; y < W; y++) {
       const v = this._life[x][y];
-      if (World._isStrong(v)) sites.push({ x, y, f: v });
+      if (World._isStrong(v) && !(this._bmp && this._isWall(x, y))) sites.push({ x, y, f: v });
     }
     if (!sites.length) {
       for (let x = 0; x < W; x++) for (let y = 0; y < W; y++) this._lifeOwner[x][y] = 0;
@@ -1281,6 +1561,8 @@ export class World {
       r2ByF[this._factionOf(p.id)] = r * r;
     }
     for (let x = 0; x < W; x++) for (let y = 0; y < W; y++) {
+      // 形状/虚空感知：墙格（形状外 / 虚空）不参与势力归属（否则 Voronoi 会蔓延到棋盘外）。
+      if (this._bmp && this._isWall(x, y)) { this._lifeOwner[x][y] = 0; continue; }
       const si = owner[x][y];
       if (si < 0) { this._lifeOwner[x][y] = 0; continue; }
       const s = sites[si];
@@ -1303,6 +1585,8 @@ export class World {
     const counts = Array.from({ length: World.REGION_W * World.REGION_W }, () => Object.create(null));
     for (let x = 0; x < W; x++) {
       for (let y = 0; y < W; y++) {
+        // 形状/虚空感知：墙格不计入区域归属与强细胞数（形状外/虚空不参与区域争夺）。
+        if (this._bmp && this._isWall(x, y)) continue;
         const v = this._life[x][y];
         if (World._isStrong(v)) cellCounts[v] = (cellCounts[v] || 0) + 1;
         const f = owner[x][y];
@@ -1511,6 +1795,8 @@ export class World {
         victoryLines: this.victoryLines,
         victoryThresholds: this.victoryThresholds,
         availableLines: World.availableLines(this.mode),
+        // 棋盘形状（房主可配置）：每帧下发小对象 {w,h,shape} 或 null（默认矩形）。绝不下发 100×100 数组。
+        board: this.board,
       },
       // 棋子伤害（稀疏）：只含 dmg>0 的格子 [x,y,dmg]，供客户端显示"挨打的棋子"。两种模式都要有。
       lifeHits: this._lifeHits(),
@@ -1574,6 +1860,10 @@ export class World {
       // （玩家看不见资源 → 不知道要干什么）。地形静态：低频重发；资源稀疏 + 每秒重算。
       terrainStr: (this.tick <= 1 || this.tick % 20 === 1) ? this._terrainString() : null,
       resPoints: this._resourcePoints(),
+      // 棋盘形状位图串（编译位图 = shape）——**低频**下发（tick<=1 或 board 变更时），
+      // 其余帧 null（参照 terrainStr 范式）。rts 生命层恒 32×32 → 快照零增长。
+      boardMap: (this.board && (this.tick <= 1 || this._boardMapSentRev !== this._boardRev))
+        ? (this._boardMapSentRev = this._boardRev, this.board.shape) : null,
     };
   }
   // 地形打包成字符串（每字符一格，0-5）—— 一次约 9KB，低频下发

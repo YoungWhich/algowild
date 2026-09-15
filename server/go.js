@@ -140,7 +140,7 @@ export function installGoMode(World) {
       const [cx, cy] = stack.pop();
       for (const [dx, dy] of NEI4) {
         const nx = cx + dx, ny = cy + dy;
-        if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
+        if (this._isWall(nx, ny)) continue;
         const key = nx * W + ny;
         if (seen.has(key)) continue;
         const v = L[nx][ny];
@@ -169,7 +169,7 @@ export function installGoMode(World) {
       comp.push([cx, cy]);
       for (const [dx, dy] of NEI4) {
         const nx = cx + dx, ny = cy + dy;
-        if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
+        if (this._isWall(nx, ny)) continue;
         const key = nx * W + ny;
         if (!seen.has(key) && L[nx][ny] === f) { seen.add(key); stack.push([nx, ny]); }
       }
@@ -222,7 +222,7 @@ export function installGoMode(World) {
       if (cy < minY) minY = cy;
       for (const [dx, dy] of NEI4) {
         const nx = cx + dx, ny = cy + dy;
-        if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
+        if (this._isWall(nx, ny)) continue;
         const key = nx * W + ny;
         if (!seen.has(key) && L[nx][ny] === f) { seen.add(key); stack.push([nx, ny]); }
       }
@@ -273,7 +273,8 @@ export function installGoMode(World) {
     for (const m of moves) {
       if (!m || typeof m.lx !== 'number' || typeof m.ly !== 'number') return { ok: false, reason: 'bad_move' };
       const lx = m.lx | 0, ly = m.ly | 0;
-      if (lx < 0 || ly < 0 || lx >= W || ly >= W) return { ok: false, reason: 'oob' };
+      // 形状/虚空感知：越界 ∪ 形状外 ∪ 虚空 → 不可落子（统一复用 oob，前端零改动）。
+      if (this._isWall(lx, ly)) return { ok: false, reason: 'oob' };
       const key = lx * W + ly;
       if (seen.has(key)) return { ok: false, reason: 'duplicate' };
       seen.add(key);
@@ -290,7 +291,7 @@ export function installGoMode(World) {
     for (const p of pts) {
       for (const [dx, dy] of NEI4) {
         const nx = p.lx + dx, ny = p.ly + dy;
-        if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
+        if (this._isWall(nx, ny)) continue;
         const v = L[nx][ny];
         if (!v || v === f) continue;
         const k = nx * W + ny;
@@ -348,7 +349,7 @@ export function installGoMode(World) {
       const [cx, cy] = stack.pop();
       for (const [dx, dy] of NEI4) {
         const nx = cx + dx, ny = cy + dy;
-        if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
+        if (this._isWall(nx, ny)) continue;
         const key = nx * W + ny;
         if (seen.has(key)) continue;
         const v = L[nx][ny];
@@ -399,12 +400,16 @@ export function installGoMode(World) {
     const cnt = new Array(9).fill(0);
     for (let x = 0; x < W; x++) {
       for (let y = 0; y < W; y++) {
+        // 形状/虚空感知（★必须新增段落，呼应 PRD G7）：格子自身若是「虚空 / 形状外」→
+        // next=0 且永不诞生（否则邻近细胞会在 n===bornThresh 时把棋盘外的格"诞生"出棋子）。
+        // board=null 时该分支不进入（逐字节不变）。
+        if (this._bmp && this._isWall(x, y)) { next[x][y] = 0; doomNext[x][y] = -1; continue; }
         let n = 0;
         for (let i = 0; i < 9; i++) cnt[i] = 0;
         for (const [dx, dy] of NEI8) {
           const nx = x + dx, ny = y + dy;
-          // 非环形边界：越界视为死区（围棋棋盘有天然边界，环形会让"角"失去意义）
-          if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
+          // 非环形边界：越界 / 形状外 / 虚空视为死区（围棋棋盘有天然边界，环形会让"角"失去意义）
+          if (this._isWall(nx, ny)) continue;
           const v = L[nx][ny];
           if (v > 0 && v < cnt.length) { n++; cnt[v]++; }
         }
@@ -536,7 +541,7 @@ export function installGoMode(World) {
           size++;
           for (const [dx, dy] of NEI4) {
             const nx = cx + dx, ny = cy + dy;
-            if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;
+            if (this._isWall(nx, ny)) continue;
             const key = nx * W + ny;
             if (!seen.has(key) && L[nx][ny] === f) { seen.add(key); stack.push([nx, ny]); }
           }
@@ -603,7 +608,7 @@ export function installGoMode(World) {
       let ok = 0;
       for (const [cx, cy] of comp) {
         const nx = cx + dx, ny = cy + dy;
-        if (nx < 0 || ny < 0 || nx >= W || ny >= W) break;
+        if (this._isWall(nx, ny)) break;
         if (L[nx][ny] !== 0) { ok++; }
       }
       if (ok === comp.length) return true;
@@ -687,15 +692,18 @@ export function installGoMode(World) {
       for (let y = 0; y < W; y++) {
         const key = x * W + y;
         if (L[x][y] !== 0 || seen[key]) continue;  // 只从未访问的空点起 BFS
+        // 形状/虚空感知：墙格（形状外 / 虚空）**不可穿越、不并入空区、不计归属**。
+        // 不从此格起 BFS（避免把虚空当成空点去归属），后续洪水填充也不进入墙格。
+        if (this._isWall(x, y)) { seen[key] = 1; continue; }
         // --- 洪水填充一个连通空区 ---
         const stack = [[x, y]]; seen[key] = 1;
         let cellCount = 0;                         // 本空区空格数
-        const borderF = new Set();                 // 接触到的非空阵营（越界不计）
+        const borderF = new Set();                 // 接触到的非空阵营（越界/墙不计）
         while (stack.length) {
           const [cx, cy] = stack.pop(); cellCount++;
           for (const [dx, dy] of NEI4) {
             const nx = cx + dx, ny = cy + dy;
-            if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;   // 棋盘边 = 无归属
+            if (this._isWall(nx, ny)) continue;    // 棋盘边 ∪ 形状外 ∪ 虚空 = 无归属（阻断连通）
             const v = L[nx][ny];
             if (v === 0) { const k = nx * W + ny; if (!seen[k]) { seen[k] = 1; stack.push([nx, ny]); } }
             else borderF.add(v);                   // 记录接触到的阵营

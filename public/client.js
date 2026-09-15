@@ -175,6 +175,8 @@ function roomOpts() {
     lonelyDeathDelay: clampInt($('room-delay') && $('room-delay').value, 0, 10, 0),
     // 胜利条件（房主勾选；服务端按模式再 gate）
     victoryLines: collectVictoryLines('victory-lines-build-list', mode),
+    // 棋盘形状（可编辑棋盘）：null = 默认矩形；否则为序列化三态位图字符串
+    board: collectBoard('board-build-editor'),
   };
 }
 // 整数钳制：非数字/空 → 默认；越界 → 钳到边界。
@@ -183,6 +185,397 @@ function clampInt(v, min, max, dflt) {
   const n = Math.floor(Number(v));
   if (!Number.isFinite(n)) return dflt;
   return Math.max(min, Math.min(max, n));
+}
+
+// ============== 可编辑棋盘（形状 + 虚空格）—— 前端画布编辑器 ==============
+// 契约与后端 engine.js 完全一致：
+//   三态：0=形状外/墙（SHAPE_OUT）· 1=可落子（SHAPE_PLAY）· 2=虚空/墙（SHAPE_VOID）
+//   位图索引：行优先 bmp[ly*w + lx]
+//   序列化：行优先，'.'=形状外 '#'=可落子 'x'=虚空，行间用 '/' 分隔（紧凑串）
+//   null = 默认矩形（实时 192×192 / 回合制 32×32），服务端把 null 归一为默认矩形。
+const BOARD_MAX = 100;         // 位图边长上限（含）
+const BOARD_MIN = 1;           // 位图边长下限（含）
+const BOARD_OUT = 0, BOARD_PLAY = 1, BOARD_VOID = 2;
+const BOARD_CHAR = { 0: '.', 1: '#', 2: 'x' };
+const BOARD_CHAR_INV = { '.': 0, '#': 1, 'x': 2 };
+// UI 配色：形状外用深灰（墙体到底）· 虚空用红（可辨认的"洞"）· 可落子用绿
+const BOARD_COLOR = {
+  0: '#21262d',   // 形状外（墙）
+  1: '#2ea043',   // 可落子
+  2: '#f85149',   // 虚空（墙）
+};
+
+// 尺寸上限：由模式决定（实时 192 / 回合制 32）。未知模式 → 32。
+function boardMaxForMode(mode) {
+  return (mode === 'rts') ? 192 : 32;
+}
+
+// 位图 → 紧凑序列化串（行优先，'/' 分行）。
+function encodeBoardClient(w, h, shape) {
+  const rows = [];
+  for (let y = 0; y < h; y++) {
+    let row = '';
+    for (let x = 0; x < w; x++) row += (BOARD_CHAR[shape[y * w + x]] || '.');
+    rows.push(row);
+  }
+  return rows.join('/');
+}
+
+// 紧凑序列化串 → 位图（容错：非法字符按形状外处理；缺行/缺列补形状外）。
+// 返回 { w, h, shape } 或 null（无法解析）。
+function decodeBoardClient(str) {
+  if (typeof str !== 'string' || !str) return null;
+  const rows = str.split('/');
+  const h = rows.length;
+  let w = 0;
+  for (const r of rows) if (r.length > w) w = r.length;
+  if (w < 1 || h < 1) return null;
+  const shape = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const r = rows[y] || '';
+    for (let x = 0; x < w; x++) {
+      shape[y * w + x] = (BOARD_CHAR_INV[r[x]] !== undefined) ? BOARD_CHAR_INV[r[x]] : BOARD_OUT;
+    }
+  }
+  return { w, h, shape };
+}
+
+// 归一棋盘：把服务端返回的 board（可能是对象 {w,h,shape} 或字符串或 null）转成
+// 客户端内部 { w, h, shape(Uint8Array) }；null/非法 → 返回 null（= 默认矩形）。
+function normBoardClient(raw) {
+  if (!raw) return null;
+  let w = 0, h = 0, shape = null;
+  if (typeof raw === 'string') {
+    const d = decodeBoardClient(raw);
+    if (!d) return null;
+    w = d.w; h = d.h; shape = d.shape;
+  } else if (typeof raw === 'object') {
+    w = clampInt(raw.w, 1, BOARD_MAX, 0);
+    h = clampInt(raw.h, 1, BOARD_MAX, 0);
+    if (!w || !h) return null;
+    if (Array.isArray(raw.shape)) {
+      shape = new Uint8Array(w * h);
+      for (let i = 0; i < w * h; i++) {
+        const v = raw.shape[i];
+        shape[i] = (v === 0 || v === 1 || v === 2) ? v : 0;
+      }
+    } else if (typeof raw.shape === 'string') {
+      const d = decodeBoardClient(raw.shape);
+      if (d && d.w === w && d.h === h) shape = d.shape;
+    }
+    if (!shape) return null;
+  } else {
+    return null;
+  }
+  // 全形状外 = 无意义（等价于空棋盘），归一为 null（服务端也拒绝）
+  let any = false;
+  for (let i = 0; i < shape.length; i++) if (shape[i] === BOARD_PLAY || shape[i] === BOARD_VOID) { any = true; break; }
+  if (!any) return null;
+  return { w, h, shape };
+}
+
+// 默认矩形位图（全可落子）。
+function makeRectBoard(w, h) {
+  const shape = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) shape[i] = BOARD_PLAY;
+  return { w, h, shape };
+}
+
+// 形状转置/旋转 90°（顺时针）。
+function rotateBoard90(b) {
+  const { w, h, shape } = b;
+  const nw = h, nh = w;
+  const ns = new Uint8Array(nw * nh);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const nx = h - 1 - y, ny = x;
+      ns[ny * nw + nx] = shape[y * w + x];
+    }
+  }
+  return { w: nw, h: nh, shape: ns };
+}
+
+// 6 个内置预设模板（与后端 BOARD_PRESETS 同名同形）。tpl=模板键，w/h=目标尺寸。
+// 说明：前端只做"示意 + 初始值"，可落子区域按模板在 w×h 上等比生成；
+// 真正权威的形状仍由服务端引擎计算/校验。
+function boardPresetClient(tpl, w, h) {
+  const out = new Uint8Array(w * h);
+  const set = (x, y, v) => { if (x >= 0 && x < w && y >= 0 && y < h) out[y * w + x] = v; };
+  for (let i = 0; i < w * h; i++) out[i] = BOARD_OUT;
+  const cx = (w - 1) / 2, cy = (h - 1) / 2;
+  if (tpl === 'rect') {
+    for (let i = 0; i < w * h; i++) out[i] = BOARD_PLAY;
+  } else if (tpl === 'cross') {
+    const tw = Math.max(1, Math.round(w / 3)), th = Math.max(1, Math.round(h / 3));
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (Math.abs(x - cx) <= tw / 2 || Math.abs(y - cy) <= th / 2) set(x, y, BOARD_PLAY);
+    }
+  } else if (tpl === 'castle') {
+    const inset = Math.max(1, Math.round(Math.min(w, h) * 0.12));
+    for (let y = inset; y < h - inset; y++) for (let x = inset; x < w - inset; x++) set(x, y, BOARD_PLAY);
+    // 四角挖空（城垛感）
+    const c = Math.max(1, Math.round(Math.min(w, h) * 0.15));
+    for (let y = inset; y < inset + c; y++) for (let x = inset; x < inset + c; x++) { set(x, y, BOARD_OUT); set(w - 1 - x, y, BOARD_OUT); set(x, h - 1 - y, BOARD_OUT); set(w - 1 - x, h - 1 - y, BOARD_OUT); }
+  } else if (tpl === 'twins') {
+    const gap = Math.max(1, Math.round(w * 0.08));
+    const half = Math.max(1, Math.floor((w - gap) / 2));
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (x < half || x >= w - half) set(x, y, BOARD_PLAY);
+    }
+  } else if (tpl === 'ring') {
+    const R = Math.min(w, h) / 2 - 0.5;
+    const inner = R * 0.55;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const d = Math.hypot(x - cx, y - cy);
+      if (d <= R && d >= inner) set(x, y, BOARD_PLAY);
+    }
+  } else if (tpl === 'islands') {
+    // 确定性伪随机：mulberry32（与后端同算法，同 seed 同形；禁止 Math.random）
+    const rng = mulberry32Client(0x9e3779b9);
+    const n = Math.max(3, Math.round((w * h) / 260));
+    for (let k = 0; k < n; k++) {
+      const ix = Math.floor(rng() * w), iy = Math.floor(rng() * h);
+      const rr = 1 + Math.floor(rng() * 2);
+      for (let y = iy - rr; y <= iy + rr; y++) for (let x = ix - rr; x <= ix + rr; x++) {
+        if (Math.hypot(x - ix, y - iy) <= rr) set(x, y, BOARD_PLAY);
+      }
+    }
+  } else {
+    for (let i = 0; i < w * h; i++) out[i] = BOARD_PLAY;
+  }
+  let any = false;
+  for (let i = 0; i < w * h; i++) if (out[i] === BOARD_PLAY) { any = true; break; }
+  if (!any) return makeRectBoard(w, h);
+  return { w, h, shape: out };
+}
+
+// mulberry32：确定性伪随机（前端版，仅用于预设示意，禁止 Math.random）
+function mulberry32Client(a) {
+  a = a >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// 预设显示名（与后端一致）
+const BOARD_PRESET_LABELS = {
+  rect: '矩形', cross: '十字', castle: '城堡', twins: '双子', ring: '环形', islands: '群岛',
+};
+const BOARD_PRESET_KEYS = ['rect', 'cross', 'castle', 'twins', 'ring', 'islands'];
+
+// 棋盘编辑器组件：绑定到一个 canvas，负责绘制 + 交互（画/挖/擦/填/旋转/重置）。
+// 用法：const ed = new BoardEditor(canvasEl, mode); ed.getBoard() → 归一棋盘或 null。
+class BoardEditor {
+  /**
+   * @param {HTMLCanvasElement} canvas
+   * @param {('rts'|'go')} mode
+   * @param {{onChange?:Function}} [opts]
+   */
+  constructor(canvas, mode, opts) {
+    this.cv = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.mode = mode === 'go' ? 'go' : 'rts';
+    this.max = boardMaxForMode(this.mode);
+    this.onChange = (opts && opts.onChange) || null;
+    // 默认尺寸：rts 32（示意，服务端权威仍为 192）/ go 32
+    const defN = this.mode === 'rts' ? 32 : 32;
+    this.board = null;              // null = 默认矩形
+    this.w = defN;
+    this.h = defN;
+    this.shape = null;              // Uint8Array，null 时惰性生成矩形
+    this.tool = 'brush';            // brush | void | erase | fill
+    this.dragging = false;
+    this._bind();
+    this._ensureShape();
+    this._render();
+  }
+  // 惰性生成矩形形状。
+  _ensureShape() {
+    if (this.shape && this.shape.length === this.w * this.h) return;
+    if (this.board) { this.shape = this.board.shape.slice(); }
+    else { this.shape = new Uint8Array(this.w * this.h).fill(BOARD_PLAY); }
+  }
+  _bind() {
+    const pos = (e) => {
+      const r = this.cv.getBoundingClientRect();
+      const px = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+      const py = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+      const x = Math.max(0, Math.min(this.w - 1, Math.floor(px / r.width * this.w)));
+      const y = Math.max(0, Math.min(this.h - 1, Math.floor(py / r.height * this.h)));
+      return { x, y };
+    };
+    const paintAt = (x, y) => {
+      const v = this.tool === 'void' ? BOARD_VOID : (this.tool === 'erase' ? BOARD_OUT : BOARD_PLAY);
+      if (this.shape[y * this.w + x] !== v) { this.shape[y * this.w + x] = v; this._dirty = true; }
+    };
+    const onDown = (e) => {
+      e.preventDefault();
+      const { x, y } = pos(e);
+      if (this.tool === 'fill') {
+        const v = (this.shape[y * this.w + x] === BOARD_PLAY) ? BOARD_PLAY : BOARD_PLAY;
+        this._floodFill(x, y, v);
+      } else { this.dragging = true; paintAt(x, y); }
+      this._render();
+      if (this.onChange) this.onChange(this);
+    };
+    const onMove = (e) => {
+      if (!this.dragging) return;
+      e.preventDefault();
+      const { x, y } = pos(e);
+      paintAt(x, y);
+      this._render();
+    };
+    const onUp = () => {
+      if (this.dragging && this.onChange) this.onChange(this);
+      this.dragging = false;
+    };
+    this.cv.addEventListener('mousedown', onDown);
+    this.cv.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    this.cv.addEventListener('touchstart', onDown, { passive: false });
+    this.cv.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+  }
+  // 4-邻域洪水填充：把与 (x,y) 同态的连通区域刷成 target。
+  _floodFill(x, y, target) {
+    const src = this.shape[y * this.w + x];
+    if (src === target) return;
+    const stack = [[x, y]];
+    const seen = new Uint8Array(this.w * this.h);
+    while (stack.length) {
+      const [cx, cy] = stack.pop();
+      const i = cy * this.w + cx;
+      if (seen[i]) continue;
+      if (this.shape[i] !== src) continue;
+      seen[i] = 1;
+      this.shape[i] = target;
+      if (cx > 0) stack.push([cx - 1, cy]);
+      if (cx < this.w - 1) stack.push([cx + 1, cy]);
+      if (cy > 0) stack.push([cx, cy - 1]);
+      if (cy < this.h - 1) stack.push([cx, cy + 1]);
+    }
+  }
+  // 设置尺寸（重建/裁剪；越界像素默认形状外）。
+  setSize(w, h) {
+    w = clampInt(w, BOARD_MIN, this.max, this.w);
+    h = clampInt(h, BOARD_MIN, this.max, this.h);
+    const ns = new Uint8Array(w * h);
+    for (let i = 0; i < ns.length; i++) ns[i] = BOARD_OUT;
+    const ow = this.w, oh = this.h;
+    for (let y = 0; y < Math.min(oh, h); y++) for (let x = 0; x < Math.min(ow, w); x++) {
+      ns[y * w + x] = this.shape[y * ow + x];
+    }
+    this.w = w; this.h = h; this.shape = ns; this.board = null;
+    this._render();
+    if (this.onChange) this.onChange(this);
+  }
+  setTool(t) { this.tool = t; this._render(); }
+  // 应用预设（在当前尺寸上）。
+  setPreset(tpl) {
+    const b = boardPresetClient(tpl, this.w, this.h);
+    this.shape = b.shape; this.board = null;
+    this._render();
+    if (this.onChange) this.onChange(this);
+  }
+  rotate() {
+    const b = rotateBoard90({ w: this.w, h: this.h, shape: this.shape });
+    if (b.w > this.max || b.h > this.max) return false;   // 旋转后越界 → 拒绝
+    this.w = b.w; this.h = b.h; this.shape = b.shape; this.board = null;
+    this._render();
+    if (this.onChange) this.onChange(this);
+    return true;
+  }
+  // 重置为默认矩形（返回 null board = 默认）。
+  reset() {
+    this.board = null;
+    this.shape = new Uint8Array(this.w * this.h).fill(BOARD_PLAY);
+    this._render();
+    if (this.onChange) this.onChange(this);
+  }
+  // 载入一个已归一棋盘（用于房内编辑已有形状）。
+  load(raw, mode) {
+    if (mode) { this.mode = mode === 'go' ? 'go' : 'rts'; this.max = boardMaxForMode(this.mode); }
+    const b = normBoardClient(raw);
+    if (!b) { this.board = null; this.shape = new Uint8Array(this.w * this.h).fill(BOARD_PLAY); }
+    else { this.board = b; this.w = b.w; this.h = b.h; this.shape = b.shape.slice(); }
+    this._render();
+  }
+  // 导出：若与"默认矩形"完全一致 → 返回 null（保持默认语义）；否则返回紧凑串。
+  getBoard() {
+    const isDefaultRect = this._isDefaultRect();
+    if (isDefaultRect) return null;
+    return encodeBoardClient(this.w, this.h, this.shape);
+  }
+  // 当前是否等于默认矩形（全可落子）。注意：这里默认矩形指"当前 w×h 全可落子"，
+  // 但因为 null 语义是模式默认尺寸，只有当 w/h 等于模式默认尺寸时才等价 null。
+  _isDefaultRect() {
+    const defN = boardMaxForMode(this.mode) === 192 ? 32 : 32; // 前端 null 的示意默认边长
+    if (this.w !== defN || this.h !== defN) return false;
+    for (let i = 0; i < this.shape.length; i++) if (this.shape[i] !== BOARD_PLAY) return false;
+    return true;
+  }
+  // 尺寸描述（用于 UI 文案）。
+  infoText() {
+    let play = 0, voidN = 0, out = 0;
+    for (let i = 0; i < this.shape.length; i++) {
+      const v = this.shape[i];
+      if (v === BOARD_PLAY) play++; else if (v === BOARD_VOID) voidN++; else out++;
+    }
+    const isDef = this._isDefaultRect();
+    const name = isDef ? '矩形（默认）' : `${this.w}×${this.h}`;
+    return `形状：${name} · 可落子 ${play} · 虚空 ${voidN} · 形状外 ${out}`;
+  }
+  _render() {
+    const { ctx, cv, w, h, shape } = this;
+    const cw = w, ch = h;
+    cv.width = cw; cv.height = ch;
+    ctx.clearRect(0, 0, cw, ch);
+    const cellPx = 1; // 1 逻辑像素/格（CSS 放大）
+    for (let y = 0; y < ch; y++) {
+      for (let x = 0; x < cw; x++) {
+        const v = shape[y * w + x];
+        ctx.fillStyle = BOARD_COLOR[v] || BOARD_COLOR[0];
+        ctx.fillRect(x * cellPx, y * cellPx, cellPx, cellPx);
+      }
+    }
+  }
+}
+
+// 从编辑器读 board（编辑器实例存在则返回紧凑串，否则 null）。
+function collectBoard(editorVar) {
+  return (editorVar && editorVar.getBoard) ? editorVar.getBoard() : null;
+}
+
+// 只读缩略图绘制（房内展示当前棋盘形状；从 board 归一对象或紧凑串绘制）。
+function drawBoardThumb(canvas, rawBoard, mode) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const b = normBoardClient(rawBoard);
+  const defN = (mode === 'go') ? 32 : 32;
+  const w = b ? b.w : defN, h = b ? b.h : defN;
+  canvas.width = w; canvas.height = h;
+  ctx.clearRect(0, 0, w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const v = b ? b.shape[y * w + x] : BOARD_PLAY;
+      ctx.fillStyle = BOARD_COLOR[v] || BOARD_COLOR[0];
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+}
+
+// 棋盘形状文本（HUD / 房间展示）。
+function boardInfoText(rawBoard, mode) {
+  const b = normBoardClient(rawBoard);
+  if (!b) return (mode === 'go' ? '回合制' : '实时') + ' 默认矩形';
+  let play = 0, voidN = 0;
+  for (let i = 0; i < b.shape.length; i++) {
+    if (b.shape[i] === BOARD_PLAY) play++; else if (b.shape[i] === BOARD_VOID) voidN++;
+  }
+  return `${b.w}×${b.h} · 可落子 ${play}` + (voidN ? ` · 虚空 ${voidN}` : '');
 }
 
 // ============== 胜利条件组件（建房弹窗 + 房内面板共用同一渲染/收集逻辑） ==============
@@ -259,6 +652,8 @@ function onModeChange() {
   const mode = ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts';
   const cur = collectVictoryLines('victory-lines-build-list', mode === 'go' ? 'rts' : 'go'); // 保留旧模式下的选择
   renderVictoryLines('victory-lines-build-list', mode, cur, true);
+  // 棋盘尺寸上限随模式变化（实时 192 / 回合制 32）→ 重建编辑器
+  buildBoardEditor(mode);
 }
 if ($('room-vis')) $('room-vis').onchange = () => {
   const priv = $('room-vis').value === 'private';
@@ -269,6 +664,69 @@ if ($('world-mode')) $('world-mode').onchange = () => onModeChange();
 // 首次渲染建房弹窗的胜利条件区（默认仅勾「领土」）
 if ($('victory-lines-build-list')) {
   renderVictoryLines('victory-lines-build-list', ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts', VICTORY_LINE_DEFAULT, true);
+}
+
+// ============== 建房弹窗：棋盘形状编辑器（双入口之一） ==============
+let boardBuildEditor = null;   // 建房弹窗的编辑器实例
+// 刷新建房弹窗棋盘 UI 文案 + 预设按钮高亮。
+function refreshBoardBuildInfo(tplKey) {
+  if (!boardBuildEditor) return;
+  if ($('board-build-info')) $('board-build-info').textContent = boardBuildEditor.infoText();
+  const box = $('board-build-presets');
+  if (box) {
+    box.querySelectorAll('[data-tpl]').forEach(b => {
+      const on = b.getAttribute('data-tpl') === tplKey;
+      b.style.borderColor = on ? '#58a6ff' : '#30363d';
+      b.style.color = on ? '#58a6ff' : '#c9d1d9';
+    });
+  }
+  const curW = $('board-build-w'), curH = $('board-build-h');
+  if (curW) curW.value = boardBuildEditor.w;
+  if (curH) curH.value = boardBuildEditor.h;
+}
+// 重建（或首次创建）建房弹窗棋盘编辑器。
+function buildBoardEditor(mode) {
+  const canvas = $('board-build-canvas');
+  if (!canvas) return;
+  const m = mode === 'go' ? 'go' : 'rts';
+  const prev = boardBuildEditor ? boardBuildEditor.getBoard() : null;
+  boardBuildEditor = new BoardEditor(canvas, m, { onChange: () => refreshBoardBuildInfo() });
+  if (prev) boardBuildEditor.load(prev, m);
+  refreshBoardBuildInfo();
+  // 预设按钮
+  const box = $('board-build-presets');
+  if (box && !box.dataset.bound) {
+    box.dataset.bound = '1';
+    box.innerHTML = BOARD_PRESET_KEYS.map(k =>
+      `<button class="board-tool" data-tpl="${k}" style="flex:0 0 auto;padding:2px 8px">${BOARD_PRESET_LABELS[k]}</button>`
+    ).join('');
+    box.querySelectorAll('[data-tpl]').forEach(b => {
+      b.onclick = () => { boardBuildEditor.setPreset(b.getAttribute('data-tpl')); refreshBoardBuildInfo(b.getAttribute('data-tpl')); };
+    });
+  }
+  // 工具按钮（画/挖/擦/填）
+  const toolBtns = [['board-build-brush', 'brush'], ['board-build-void', 'void'], ['board-build-erase', 'erase'], ['board-build-fill', 'fill']];
+  toolBtns.forEach(([id, tool]) => {
+    const b = $(id);
+    if (b) b.onclick = () => {
+      boardBuildEditor.setTool(tool);
+      toolBtns.forEach(([bid]) => { const e = $(bid); if (e) { e.style.borderColor = '#30363d'; e.style.color = '#c9d1d9'; } });
+      b.style.borderColor = '#58a6ff'; b.style.color = '#58a6ff';
+    };
+  });
+  if ($('board-build-rotate')) $('board-build-rotate').onclick = () => { if (!boardBuildEditor.rotate()) toast('旋转后超出尺寸上限'); refreshBoardBuildInfo(); };
+  if ($('board-build-reset')) $('board-build-reset').onclick = () => { boardBuildEditor.reset(); refreshBoardBuildInfo('rect'); };
+  if ($('board-build-default')) $('board-build-default').onclick = () => {
+    const m2 = m === 'rts' ? 32 : 32;
+    boardBuildEditor.setSize(m2, m2); refreshBoardBuildInfo('rect');
+  };
+  if ($('board-build-w')) $('board-build-w').onchange = () => { boardBuildEditor.setSize(parseInt($('board-build-w').value, 10), boardBuildEditor.h); refreshBoardBuildInfo(); };
+  if ($('board-build-h')) $('board-build-h').onchange = () => { boardBuildEditor.setSize(boardBuildEditor.w, parseInt($('board-build-h').value, 10)); refreshBoardBuildInfo(); };
+  // 默认工具高亮
+  if ($('board-build-brush')) { $('board-build-brush').style.borderColor = '#58a6ff'; $('board-build-brush').style.color = '#58a6ff'; }
+}
+if ($('board-build-canvas')) {
+  buildBoardEditor(($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts');
 }
 
 async function createRoomFlow() {
@@ -329,10 +787,11 @@ if ($('quick-room')) $('quick-room').onclick = async () => {
       stonesPerTurn: clampInt($('room-stones') && $('room-stones').value, 1, 16, 3),
       lonelyDeathDelay: clampInt($('room-delay') && $('room-delay').value, 0, 10, 0),
       victoryLines: collectVictoryLines('victory-lines-build-list', mode),
+      board: collectBoard(boardBuildEditor),
     });
     state.roomCode = r.code;
     state.mode = mode;
-    await api('POST', `/api/rooms/${r.code}/world`, { mode });
+    await api('POST', `/api/rooms/${r.code}/world`, { mode, board: collectBoard(boardBuildEditor) });
     const j = await api('POST', `/api/rooms/${r.code}/join`);       // 人类先入座
     state.worldId = j.worldId;
     state.mode = j.mode || mode;
@@ -422,6 +881,96 @@ if ($('victory-edit')) $('victory-edit').onclick = async () => {
   $('modal').addEventListener('click', onBackdrop);
   document.addEventListener('keydown', onKey);
 };
+
+// 房主编辑棋盘形状（弹 modal → PATCH /rooms/:code/settings { board }）
+// 已开始的房间由服务端强制拒绝（403 board_locked，Q3=a）→ 此处按钮也会置灰。
+if ($('board-edit')) $('board-edit').onclick = async () => {
+  if (!state.roomCode) { toast('先建房/进房'); return; }
+  const info = state._roomInfo || await api('GET', `/api/rooms/${state.roomCode}`);
+  if (info.started) { toast('对局已开始，棋盘形状已锁定'); return; }
+  const mode = info.mode === 'go' ? 'go' : 'rts';
+  $('modal-title').textContent = '编辑棋盘形状（房主）';
+  $('modal-body').innerHTML = `
+    <div style="font-size:13px;line-height:1.6">
+      <div style="color:#8b949e;font-size:12px;margin-bottom:6px">
+        裁剪形状（形状外=墙）或挖出「虚空格」（虚空=墙，不可落子/不可被吃）。对局开始后不可再改。
+      </div>
+      <div id="board-edit-presets" class="row" style="flex-wrap:wrap;gap:4px;margin:4px 0"></div>
+      <canvas id="board-edit-canvas" width="240" height="240"
+              style="width:240px;height:240px;border:1px solid #30363d;border-radius:4px;background:#0d1117;touch-action:none"></canvas>
+      <div class="row" style="gap:4px;margin-top:4px;flex-wrap:wrap">
+        <button id="board-edit-brush"  class="board-tool">画●</button>
+        <button id="board-edit-void"   class="board-tool">挖✕</button>
+        <button id="board-edit-erase"  class="board-tool">擦除·</button>
+        <button id="board-edit-fill"   class="board-tool">填充</button>
+        <button id="board-edit-rotate" class="board-tool">旋转</button>
+        <button id="board-edit-reset"  class="board-tool">重置</button>
+      </div>
+      <div class="row" style="gap:4px;margin-top:4px;align-items:center">
+        <span style="font-size:11px;color:#8b949e">尺寸</span>
+        <input id="board-edit-w" type="number" min="1" max="100" step="1" style="flex:0 0 64px">
+        <span style="font-size:11px;color:#8b949e">×</span>
+        <input id="board-edit-h" type="number" min="1" max="100" step="1" style="flex:0 0 64px">
+      </div>
+      <div id="board-edit-info" style="color:#6e7681;font-size:11px;margin-top:6px"></div>
+      <div style="color:#6e7681;font-size:11px;margin-top:2px">图例：<span style="color:#3fb950">●可落子</span> / <span style="color:#8b949e">·形状外(墙)</span> / <span style="color:#f85149">✕虚空(墙)</span></div>
+    </div>`;
+  const ed = new BoardEditor($('board-edit-canvas'), mode, { onChange: () => { if ($('board-edit-info')) $('board-edit-info').textContent = ed.infoText(); } });
+  ed.load(info.board, mode);
+  if ($('board-edit-w')) $('board-edit-w').value = ed.w;
+  if ($('board-edit-h')) $('board-edit-h').value = ed.h;
+  if ($('board-edit-info')) $('board-edit-info').textContent = ed.infoText();
+  // 预设
+  const pbox = $('board-edit-presets');
+  if (pbox) {
+    pbox.innerHTML = BOARD_PRESET_KEYS.map(k =>
+      `<button class="board-tool" data-tpl="${k}" style="flex:0 0 auto;padding:2px 8px">${BOARD_PRESET_LABELS[k]}</button>`
+    ).join('');
+    pbox.querySelectorAll('[data-tpl]').forEach(b => {
+      b.onclick = () => { ed.setPreset(b.getAttribute('data-tpl')); if ($('board-edit-info')) $('board-edit-info').textContent = ed.infoText(); };
+    });
+  }
+  const tools = [['board-edit-brush', 'brush'], ['board-edit-void', 'void'], ['board-edit-erase', 'erase'], ['board-edit-fill', 'fill']];
+  tools.forEach(([id, tool]) => {
+    const b = $(id);
+    if (b) b.onclick = () => {
+      ed.setTool(tool);
+      tools.forEach(([bid]) => { const e = $(bid); if (e) { e.style.borderColor = '#30363d'; e.style.color = '#c9d1d9'; } });
+      b.style.borderColor = '#58a6ff'; b.style.color = '#58a6ff';
+    };
+  });
+  if ($('board-edit-rotate')) $('board-edit-rotate').onclick = () => { if (!ed.rotate()) toast('旋转后超出尺寸上限'); if ($('board-edit-info')) $('board-edit-info').textContent = ed.infoText(); };
+  if ($('board-edit-reset')) $('board-edit-reset').onclick = () => { ed.reset(); if ($('board-edit-info')) $('board-edit-info').textContent = ed.infoText(); };
+  if ($('board-edit-w')) $('board-edit-w').onchange = () => { ed.setSize(parseInt($('board-edit-w').value, 10), ed.h); if ($('board-edit-info')) $('board-edit-info').textContent = ed.infoText(); };
+  if ($('board-edit-h')) $('board-edit-h').onchange = () => { ed.setSize(ed.w, parseInt($('board-edit-h').value, 10)); if ($('board-edit-info')) $('board-edit-info').textContent = ed.infoText(); };
+  if ($('board-edit-brush')) { $('board-edit-brush').style.borderColor = '#58a6ff'; $('board-edit-brush').style.color = '#58a6ff'; }
+  const ok = $('modal-ok');
+  ok.textContent = '保存';
+  $('modal').style.display = 'flex';
+  const cleanup = () => {
+    ok.removeEventListener('click', onOk);
+    $('modal').removeEventListener('click', onBackdrop);
+    document.removeEventListener('keydown', onKey);
+    ok.textContent = '确定';
+  };
+  const doClose = () => { $('modal').style.display = 'none'; cleanup(); };
+  const onBackdrop = (e) => { if (e.target === $('modal')) doClose(); };
+  const onKey = (e) => { if (e.key === 'Escape') doClose(); };
+  const onOk = async () => {
+    const board = ed.getBoard();
+    try {
+      const d = await api('PATCH', `/api/rooms/${state.roomCode}/settings`, { board });
+      state._roomInfo = d.room;
+      renderLobby(d.room);
+      toast('✅ 已更新棋盘形状');
+      doClose();
+    } catch (e) { toast('更新失败：' + e.message); }
+  };
+  ok.addEventListener('click', onOk);
+  $('modal').addEventListener('click', onBackdrop);
+  document.addEventListener('keydown', onKey);
+};
+
 if ($('lobby-leave')) $('lobby-leave').onclick = () => {
   state.roomCode = null; state.worldId = null;
   if (state.ws) try { state.ws.close(); } catch {}
@@ -468,6 +1017,29 @@ function renderLobby(info) {
   if ($('victory-edit-row')) {
     $('victory-edit-row').style.display = (isHost) ? 'flex' : 'none';
   }
+  // 棋盘形状展示（只读缩略图；房主未开局可点[编辑]改；已开始则锁定灰显）
+  if ($('board-info')) {
+    $('board-info').textContent = boardInfoText(info.board, vMode)
+      + (isHost ? '' : '（房主设定）');
+  }
+  if ($('board-thumb-row')) {
+    const hasBoard = !!normBoardClient(info.board);
+    $('board-thumb-row').style.display = hasBoard ? 'flex' : 'none';
+    if (hasBoard) {
+      drawBoardThumb($('board-thumb'), info.board, vMode);
+      if ($('board-thumb-legend')) {
+        $('board-thumb-legend').innerHTML =
+          `<span style="color:#3fb950">●可落子</span><br>`
+          + `<span style="color:#8b949e">·形状外(墙)</span><br>`
+          + `<span style="color:#f85149">✕虚空(墙)</span>`;
+      }
+    }
+  }
+  if ($('board-edit-row')) {
+    // 房主且未开始才可编辑；已开始 → 隐藏（服务端另有 403 board_locked 强制）
+    $('board-edit-row').style.display = (isHost && !info.started) ? 'flex' : 'none';
+  }
+  if ($('board-edit') && info.started) { $('board-edit').disabled = true; }
   // 房主按钮
   if ($('lobby-build-row')) $('lobby-build-row').style.display = (isHost && phase === 'lobby') ? 'flex' : 'none';
   if ($('lobby-start-row')) $('lobby-start-row').style.display = (isHost && phase !== 'lobby' && !info.started) ? 'flex' : 'none';
@@ -2721,10 +3293,23 @@ function renderVictoryHud() {
   el.style.color = none ? '#ffa94d' : '#e6edf3';
 }
 
+// 棋盘形状常驻行：文本 = snapshot.settings.board（后端权威）。默认矩形时也可显示（标注"默认矩形"）。
+function renderBoardHud() {
+  const el = $('board-hud');
+  if (!el) return;
+  const s = (state.world && state.world.settings) || {};
+  const mode = isGo() ? 'go' : 'rts';
+  const txt = boardInfoText(s.board, mode);
+  el.innerHTML = `棋盘：<b>${escapeHtml(txt)}</b>`;
+  el.style.display = 'block';
+}
+
 function renderHud() {
   if (!state.world) return;
   // 胜利条件常驻行（rts 与 go 都显示；文本严格来自 snapshot.settings.victoryLines）
   renderVictoryHud();
+  // 棋盘形状常驻行（rts 与 go 都显示；默认矩形也标注）
+  renderBoardHud();
   // go（回合制）模式：隐藏全部 rts 元素，只显示 go 专用 HUD。
   if (isGo()) { renderGoHud(); return; }
   // rts 模式：确保 go 专用元素隐藏

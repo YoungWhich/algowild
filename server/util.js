@@ -42,10 +42,15 @@ export const inBounds = (x, y) => x >= 0 && x < WORLD_W && y >= 0 && y < WORLD_H
 
 // 远距出生点：在 N 个候选点里选一个离所有现存玩家最远的（确定性，用传入的 rng）。
 // 让 4 方从地图四角各自发展、中盘在边界相遇——这是"4 方抢地"长局的前提。
-export function pickSpawn(rng, existing, tries = 24, w = WORLD_W, h = WORLD_H) {
+// isValid(x,y)：可选过滤（形状外 / 虚空 → 非法），非法候选点被跳过。
+export function pickSpawn(rng, existing, tries = 24, w = WORLD_W, h = WORLD_H, isValid = null) {
   let best = null, bestMin = -1;
-  for (let i = 0; i < tries; i++) {
+  let effectiveTries = tries;
+  // 有过滤时扩大尝试次数，保证在小形状上仍能采到合法点。
+  if (typeof isValid === 'function') effectiveTries = Math.max(tries, tries * 8);
+  for (let i = 0; i < effectiveTries; i++) {
     const x = Math.floor(rng() * w), y = Math.floor(rng() * h);
+    if (typeof isValid === 'function' && !isValid(x, y)) continue;
     let mn = Infinity;
     for (const o of existing) {
       const d2 = (o.x - x) ** 2 + (o.y - y) ** 2;

@@ -1,88 +1,79 @@
 classDiagram
   class World {
     +mode: string
+    +board: BoardConfig
+    +_bmp: Uint8Array
+    +_boardW: int
+    +_boardH: int
     +victoryLines: VictoryLines
     +victoryThresholds: VictoryThresholds
     +stonesPerTurn: int
     +lonelyDeathDelay: int
-    +static VICTORY_LINE_KEYS: string[]
-    +static VICTORY_LINE_DEFAULT: VictoryLines
-    +static VICTORY_AVAILABLE: object
-    +static VICTORY_THRESHOLD_SPEC: object
-    +static availableLines(mode) string[]
-    +static normVictoryLines(v, mode) VictoryLines
-    +static normVictoryThresholds(v) VictoryThresholds
+    +static SHAPE_OUT: 0
+    +static SHAPE_PLAY: 1
+    +static SHAPE_VOID: 2
+    +static BOARD_MIN: 1
+    +static BOARD_MAX: 100
+    +static BOARD_PRESETS: object
+    +static normBoard(v, mode) BoardConfig
+    +static encodeBoard(w, h, grid) string
+    +static decodeBoard(cfg) Uint8Array
+    +static isWall(bmp, w, h, lx, ly) boolean
+    +_isWall(lx, ly) boolean
+    +_isPlayable(lx, ly) boolean
+    +_genResources()
+    +_seedOnboarding(px, py, pid)
+    +_lifePlant(p)
+    +_lifeStep(events)
+    +_captureEnclosed(events)
+    +_updateVoronoi(rOverride)
+    +_updateRegionControl()
+    +_applyTideSpawns(events)
     +_checkVictoryConditions(events)
     +snapshot(includeEntities) object
   }
-  class VictoryLines {
-    +territory: boolean
-    +economy: boolean
-    +singularity: boolean
-    +survival: boolean
-  }
-  class VictoryThresholds {
-    +territoryRegions: int
-    +economyLead: int
-    +economyHoldTicks: int
-    +singularityThreshold: int
-    +deathLimit: int
-  }
-  class Room {
-    +code: string
-    +ownerId: int
-    +mode: string
-    +victoryLines: VictoryLines
-    +victoryThresholds: VictoryThresholds
-    +worldId: string
+  class BoardConfig {
+    +w: int
+    +h: int
+    +shape: string
   }
   class GoMixins {
-    +_goScore() ScoreResult
-    +_goScoreChinese() ChineseScore
+    +_goLiberties(x, y) int
+    +_goLoneLiberty(x, y) object
+    +_goEvolveOnce(bt)
     +_goEnclosedEmpty() object
+    +_goScoreChinese() ChineseScore
+    +_goPlayBatch(f, moves, events) object
     +_goFinish(reason, events)
-    +_goEndTurn(played, events)
     +_goSnapshotState() object
     +applyGoIntent(playerId, data, events)
   }
-  class ScoreResult {
-    +byF: object
-    +black: int
-    +white: int
-    +bonus: object
-    +ranked: RankRow[]
+  class GoAI {
+    +goAIMove(world, f) object
   }
-  class ChineseScore {
-    +byF: object
-    +black: int
-    +white: int
-    +stoneByF: object
-    +emptyByF: object
-    +ranked: RankRow[]
-  }
-  class RankRow {
-    +playerId: int
-    +faction: int
-    +name: string
-    +score: int
-    +stones: int
-    +empty: int
-    +territory: int
-    +lost: boolean
+  class Room {
+    +code: string
+    +mode: string
+    +board: BoardConfig
+    +victoryLines: VictoryLines
+    +victoryThresholds: VictoryThresholds
+    +worldId: string
   }
   class roomsRepo {
     +create(code, worldId, ownerId, maxPlayers, opts)
     +get(code)
     +setSettings(code, s)
   }
+  class SpawnHelper {
+    +pickSpawn(rng, existing, tries, w, h, isValid) array
+  }
+  World --> BoardConfig
   World --> VictoryLines
   World --> VictoryThresholds
   World ..> GoMixins : installGoMode(World)
-  GoMixins --> ScoreResult
-  GoMixins --> ChineseScore
-  ChineseScore --> RankRow
-  ScoreResult --> RankRow
-  Room --> VictoryLines
-  Room --> VictoryThresholds
-  Room ..> World : worldForRoom(norm opts)
-  roomsRepo ..> Room : create/hydrate
+  GoMixins ..> World : World.isWall / _isWall
+  GoAI ..> World : World.isWall 过滤候选
+  World ..> SpawnHelper : pickSpawn(isValid)
+  Room --> BoardConfig
+  Room ..> World : worldForRoom(norm opts 含 board)
+  roomsRepo ..> Room : create / hydrate（board TEXT）

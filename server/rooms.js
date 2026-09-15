@@ -112,6 +112,18 @@ export function availableVictoryLines(mode) {
   return mode === 'go' ? ['territory'] : ['territory', 'economy', 'singularity', 'survival'];
 }
 
+// ---- 棋盘形状归一：转发给引擎侧静态方法（避免重复实现，保证单一事实源）----
+/**
+ * 棋盘形状归一：非法/空/解析失败/行数或列数不符/全形状外 → null（回默认矩形）。
+ * @param {object|string|null|undefined} v
+ * @param {('rts'|'go'|null)} mode
+ * @returns {{w:number,h:number,shape:string}|null}
+ */
+export function normBoard(v, mode) {
+  if (WorldEngine && typeof WorldEngine.normBoard === 'function') return WorldEngine.normBoard(v, mode);
+  return null;   // 兜底：引擎未加载 → 回默认矩形（不阻塞房间创建）
+}
+
 export function makeRoomCode() {
   let code;
   let guard = 0;
@@ -136,6 +148,8 @@ export async function createRoom(o) {
   // 胜利条件（房主设定；归一后写入 → DB 镜像 → 重建时透传）
   const victoryLines = normVictoryLines(o.victoryLines, roomMode);
   const victoryThresholds = normVictoryThresholds(o.victoryThresholds);
+  // 可编辑棋盘形状（房主设定；归一后写入 → DB 镜像 → 重建时透传）
+  const board = normBoard(o.board, roomMode);
   const room = {
     code,
     ownerId: o.ownerId,
@@ -149,6 +163,7 @@ export async function createRoom(o) {
     lonelyDeathDelay,
     victoryLines,
     victoryThresholds,
+    board,
     worldId: '',
     // 大厅成员（世界尚未建立时也有人在房里等）——playerId -> { name }
     members: new Map(),
@@ -159,7 +174,7 @@ export async function createRoom(o) {
   try {
     roomsRepo.create(code, '', o.ownerId, room.maxPlayers, {
       visibility, passhash, name: room.name, mode: room.mode,
-      stonesPerTurn, lonelyDeathDelay, victoryLines, victoryThresholds,
+      stonesPerTurn, lonelyDeathDelay, victoryLines, victoryThresholds, board,
     });
   } catch (e) { /* DB 镜像失败不影响内存房间 */ }
   return room;
@@ -180,6 +195,8 @@ function hydrate(row) {
     lonelyDeathDelay: normLonelyDeathDelay(row.lonely_death_delay),
     victoryLines: normVictoryLines(row.victory_lines, row.mode || null),
     victoryThresholds: normVictoryThresholds(row.victory_thresholds),
+    // 旧库缺列/为 NULL → null（回默认矩形）
+    board: normBoard(row.board, row.mode || null),
     worldId: row.world_id || '',
     members: new Map(),
     createdAt: row.created_at,
@@ -248,6 +265,9 @@ export function roomInfo(room, viewerId) {
     : (room.victoryLines || normVictoryLines(null, modeNow));
   const victoryThresholds = (ws.victoryThresholds) ? ws.victoryThresholds
     : (room.victoryThresholds || normVictoryThresholds(null));
+  // 棋盘形状：世界为权威（建好后），否则房间记录，都没有则 null（回默认矩形）。
+  const board = (w && w.board !== undefined) ? w.board
+    : (room.board !== undefined ? room.board : null);
   return {
     code: room.code,
     name: room.name,
@@ -264,6 +284,8 @@ export function roomInfo(room, viewerId) {
     // 胜利条件（房主可配置）+ 本模式可用开关集
     victoryLines,
     victoryThresholds,
+    // 棋盘形状（房主可配置；{w,h,shape} 或 null=默认矩形）
+    board,
     availableLines: availableVictoryLines(modeNow),
     humanCount: humans,
     aiCount: ais,
@@ -325,14 +347,22 @@ export function setRoomSettings(code, patch) {
   if (!room) return null;
   if (patch && patch.victoryLines) room.victoryLines = normVictoryLines(patch.victoryLines, room.mode);
   if (patch && patch.victoryThresholds) room.victoryThresholds = normVictoryThresholds(patch.victoryThresholds);
+  // 棋盘形状：显式传 board（含 null = 回默认矩形）才更新；未传则保留现状。
+  const boardTouched = !!(patch && Object.prototype.hasOwnProperty.call(patch, 'board'));
+  if (boardTouched) room.board = normBoard(patch.board, room.mode);
   // 世界已建成 → 内存权威同步覆盖（下一次快照即生效）
   const w = roomWorld(room);
   if (w) {
     if (patch && patch.victoryLines) w.victoryLines = normVictoryLines(patch.victoryLines, w.mode);
     if (patch && patch.victoryThresholds) w.victoryThresholds = normVictoryThresholds(patch.victoryThresholds);
+    // 棋盘形状：重新编译世界内存位图（权威覆盖），下一次快照即见。
+    if (boardTouched && typeof w._compileBoard === 'function') w._compileBoard(room.board);
   }
-  try { roomsRepo.setSettings(room.code, { victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds }); }
-  catch (e) { /* DB 镜像失败不影响内存房间 */ }
+  try {
+    const persist = { victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds };
+    if (boardTouched) persist.board = room.board;
+    roomsRepo.setSettings(room.code, persist);
+  } catch (e) { /* DB 镜像失败不影响内存房间 */ }
   return room;
 }
 
