@@ -902,17 +902,22 @@ export function installGoMode(World) {
     else if (g.moveNo >= this.goLimits.maxMoves) endReason = 'max_moves';
 
     // 吃光出局（"一条命"）：曾建立规模（≥ WIPE_ELIM_MIN_CELLS）后被清零 → 登记出局。
-    // ⚠️ 用户拍板（VC-09/VC-10）：吃光**不算赢**（围棋真规则）。此处的 `wiped` 仅作为
-    //    **终局触发器**（等价于"该方已无子可数、棋局实质结束"），**不产生胜者**；
-    //    胜负一律由 _goFinish → _goScoreChinese 数子决定。
-    //    （若产品希望"清盘后继续下到双方 Pass"，删下一行 `if (!endReason) endReason = 'wiped';` 即可。）
+    // ⚠️ 用户拍板（VC-09/VC-10）：吃光**不算赢**（围棋真规则）；胜负一律由 _goFinish
+    //    → _goScoreChinese 数子决定，wiped 方 0 分、永不反超。
+    // ⚠️ 2026-09-15 修复（"怎么输的这么快"）：`wiped` 此前被当作**整局终局触发器**，
+    //    这在 2 人局成立（你被吃光 = 棋局实质结束），但在 N 方局（1 人 + 3 电脑）是错的——
+    //    任何一个 AI 被吃光就会把整局掐断，玩家才下 2 手就被判负。
+    //    现改为：被吃光**只登记出局**（lost），**不触发终局**；整局由下方
+    //    `last_standing`（只剩一方未出局）或 pass / 手数上限判定。
+    //    （2 人局行为等价：一方被吃光 → 只剩一方 → last_standing 触发终局，胜负仍由数子决定。）
+    let wipedAny = false;
     for (const pid of seats) {
       const p = this.players[pid];
       if (!p || p.lost) continue;
       if ((p.maxLifeCells || 0) >= World.WIPE_ELIM_MIN_CELLS && (p.lifeCells || 0) === 0) {
         p.lost = true; p.lostReason = 'wiped';
         events.push({ type: 'eliminated', playerId: pid, reason: 'wiped' });
-        if (!endReason) endReason = 'wiped';
+        wipedAny = true;
       }
     }
     // 累计超时判负
@@ -920,9 +925,13 @@ export function installGoMode(World) {
       const p = this.players[pid];
       if (p && (p.goTimeouts || 0) >= this.goLimits.maxTimeouts && !endReason) endReason = 'timeout';
     }
-    // 只剩一方未出局 → 触发终局（胜负仍由 _goFinish 数子排名决定，非"最后一人无条件胜"）
+    // 只剩一方未出局 → 触发终局（胜负仍由 _goFinish 数子排名决定，非"最后一人无条件胜"）。
+    // reason 区分：本回合因「被吃光」淘汰到只剩一方 → 'wiped'（保留 2 人局原语义/文案）；
+    // 否则（如超时/认输导致只剩一方）→ 'last_standing'。
     const aliveSeats = seats.filter(pid => !(this.players[pid] && this.players[pid].lost));
-    if (!endReason && aliveSeats.length <= 1 && seats.length > 1) endReason = 'last_standing';
+    if (!endReason && aliveSeats.length <= 1 && seats.length > 1) {
+      endReason = wipedAny ? 'wiped' : 'last_standing';
+    }
     if (endReason) { this._goFinish(endReason, events); return; }
 
     // 轮到下一位（跳过已出局者）
@@ -1068,6 +1077,8 @@ export function installGoMode(World) {
     const pid = (g.seats && g.seats[g.turnIdx] != null) ? g.seats[g.turnIdx] : null;
     const p = pid != null ? this.players[pid] : null;
     if (!p) return false;
+    // 已出局（被吃光 / 认输）的 AI 不再出手——换手逻辑本应跳过它，此处兜底防御。
+    if (p.lost) return false;
     // "电脑驱动" = 原生 AI 或 掉线被接管
     if (!(p.isAI === true || p.botControlled === true)) return false;
     if (!World.goAIMove) return false;

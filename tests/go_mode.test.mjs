@@ -635,3 +635,33 @@ test('GM-29 取消孤子不死：go 里孤子演化即死、2×2 稳定块存活
   assert.equal(w2._life[5][6], B2); assert.equal(w2._life[6][6], B2);
   assert.equal(w2._life[4][4], 0, '2×2 不应向角外扩散');
 });
+
+// GM-30（多方局吃光不终局，2026-09-15 修复"怎么输的这么快"）：
+// N 方局（1 人 + 3 电脑）里，任何一个 AI 被吃光**只登记出局，不触发整局终局**。
+// 旧逻辑：wiped 直接 endReason='wiped' → 玩家才下 2 手，一个 AI 被吃光就把整局掐断。
+test('GM-30 多方局吃光不终局：一个 AI 被吃光只出局，棋局继续（不再被 AI 互吃掐断）', () => {
+  const w = freshGoWorld(20260915);
+  w.maxPlayers = 4;
+  const human = w.addPlayer(1, 'Human');
+  w.addAI(); w.addAI(); w.addAI();
+  const g = w._goInit();
+  assert.equal(g.seats.length, 4, '1 人 + 3 电脑 = 4 方');
+
+  // 模拟：某 AI 曾建立规模（maxLifeCells 达标）后被吃光（lifeCells=0）
+  const aiWiped = g.seats.find(pid => w.players[pid] && w.players[pid].isAI);
+  w.players[aiWiped].maxLifeCells = 6;
+  w.players[aiWiped].lifeCells = 0;
+  // 触发一次 endTurn（当前行动方落子，多子批走 applyGoIntent → _goEndTurn）
+  const cur = g.seats[g.turnIdx];
+  const r = w.applyGoIntent(cur, { moves: [{ lx: 10, ly: 10 }, { lx: 11, ly: 10 }, { lx: 10, ly: 11 }] }, []);
+  assert.equal(r.ok, true, '当前行动方应能正常落子');
+  assert.equal(w.players[aiWiped].lost, true, '被吃光的 AI 应登记出局（lost）');
+  assert.equal(w.players[aiWiped].lostReason, 'wiped', '出局原因应为 wiped');
+  assert.equal(w.go.result, null, '★ 多方局吃光一个 AI 不应触发整局终局（result 仍为 null）');
+  // 被吃光的 AI 不再出手：轮到它时 _goMaybeAIMove 返回 false
+  // （换手逻辑会跳过它；即便 turnIdx 意外指向它，_goMaybeAIMove 也会因 p.lost 直接返回 false）
+  const aiIdx = g.seats.indexOf(aiWiped);
+  g.turnIdx = aiIdx; g.turn = g.seatF[aiIdx];
+  assert.equal(w._goMaybeAIMove([]), false, '已出局的 AI 不应再落子');
+  assert.notEqual(human.lost, true, '人类玩家不应被牵连出局');
+});
