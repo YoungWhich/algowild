@@ -289,7 +289,7 @@ test('QA-04 被吃光方即使 0 子也不会"反超"：wiped 方数子恒计入
 });
 
 // ============================================================ QA-05 数子法正确性（手算）
-test('QA-05 数子法：子数 + 单侧围空 —— 手算期望 vs _goScoreChinese', () => {
+test('QA-05 数子法：子数 + 就近归属空点 —— 手算期望 vs _goScoreChinese', () => {
   const w = seatedGo(501);
   const L = clearLife(w);
   const B = w.go.blackF, W = w.go.whiteF;
@@ -300,46 +300,46 @@ test('QA-05 数子法：子数 + 单侧围空 —— 手算期望 vs _goScoreChi
   // 白放 2 颗相邻子
   L[20][20] = W; L[21][20] = W;
   const sc = w._goScoreChinese();
-  // 手算：黑子数 = 4(围) + 3(孤) = 7；黑围空 = 1
+  // 手算：黑子数 = 4(围) + 3(孤) = 7（与口径无关）
   assert.equal(sc.stoneByF[B], 7, '黑子数 = 7');
-  assert.equal(sc.emptyByF[B], 1, '黑围空 = 1 (5,5)');
-  assert.equal(sc.byF[B], 8, '黑总分 = 7 + 1 = 8');
-  // 白子数 = 2；外围大空区同时接触黑白 → 中立 → 白围空 = 0
+  // 空点改为**就近归属**：黑子更靠近左侧/左下，白子聚于 (20,20)-(21,20)。
+  // （旧「严格围空」口径下此处 emptyByF[B] 仅 1、emptyByF[W]=0。）
+  assert.equal(sc.emptyByF[B], 541, '黑就近归属 541 个空点');
+  assert.equal(sc.byF[B], 548, '黑总分 = 7 + 541 = 548');
   assert.equal(sc.stoneByF[W], 2, '白子数 = 2');
-  assert.equal(sc.emptyByF[W] || 0, 0, '大空区接触双色 → 白无围空');
-  assert.equal(sc.byF[W], 2, '白总分 = 2');
-  assert.equal(sc.black, 8); assert.equal(sc.white, 2);
+  assert.equal(sc.emptyByF[W], 254, '白就近归属 254 个空点');
+  assert.equal(sc.byF[W], 256, '白总分 = 2 + 254 = 256');
+  assert.equal(sc.black, 548); assert.equal(sc.white, 256);
 });
 
-test('QA-05 数子法边界：被双方接触的空区必须中立（不计给任一方）', () => {
+test('QA-05 就近归属边界：对角相邻的黑白两子按距离就近切分空点', () => {
   const w = seatedGo(502);
   const L = clearLife(w);
   const B = w.go.blackF, W = w.go.whiteF;
-  // 黑白对角相邻，中间连通空区同时接触两色 → 中立
+  // 黑白对角相邻：(10,10)=黑、(11,11)=白。空点按「最近棋子」切分（不再一律中立）。
   L[10][10] = B; L[11][11] = W;
   const sc = w._goScoreChinese();
-  assert.equal(sc.emptyByF[B] || 0, 0, '双色接触的空区不给黑');
-  assert.equal(sc.emptyByF[W] || 0, 0, '双色接触的空区不给白');
-  assert.equal(sc.byF[B], 1, '黑仅 1 子');
-  assert.equal(sc.byF[W], 1, '白仅 1 子');
+  assert.equal(sc.stoneByF[B], 1, '黑子数 = 1');
+  assert.equal(sc.stoneByF[W], 1, '白子数 = 1');
+  assert.equal(sc.emptyByF[B], 120, '黑就近归属 120 空点');
+  assert.equal(sc.emptyByF[W], 440, '白就近归属 440 空点');
+  assert.equal(sc.byF[B], 121, '黑总分 = 1 + 120');
+  assert.equal(sc.byF[W], 441, '白总分 = 1 + 440');
 });
 
-test('QA-05 数子法边界：棋盘边缘外不算归属（边上开口的空区不得归该色）', () => {
+test('QA-05 就近归属边界：角落黑白两子按距离就近切分（不因棋盘边缘外误判）', () => {
   const w = seatedGo(503);
   const L = clearLife(w);
   const B = w.go.blackF, W = w.go.whiteF;
-  // 黑围三面 (0,0) 角：右 (1,0) 与下 (0,1) 是黑，左/上越界 → 开口朝棋盘外
-  // 按设计：越界不计归属，但空区 (0,0) 的 4-邻里 (1,0)/(0,1) 都是黑 → 空区仍接触单色黑 → 归黑。
-  // 关键反例：单独一颗黑紧贴角落，其"内侧"空区不能因棋盘边被算作围住。
+  // 角落 (0,0)=黑、(1,1)=白。棋盘外不计入归属；两子距离极近，白子略靠近盘内大部分区域。
   L[0][0] = B;
-  L[1][1] = W;   // 让 (1,1) 之外的空区接触两色
+  L[1][1] = W;
   const sc = w._goScoreChinese();
-  // 黑子 1、白子 1；除 (0,0)/(1,1) 外的空区连通且同时接触黑白 → 中立
   assert.equal(sc.stoneByF[B], 1);
   assert.equal(sc.stoneByF[W], 1);
-  assert.equal(sc.emptyByF[B] || 0, 0, '既不是单侧围住（接触双色）→ 不归黑');
-  assert.equal(sc.emptyByF[W] || 0, 0, '同上 → 不归白');
-  assert.equal(sc.byF[B], 1); assert.equal(sc.byF[W], 1);
+  assert.equal(sc.emptyByF[B] || 0, 0, '黑(0,0) 被白(1,1) 遮挡于盘内方向 → 0 个就近空点');
+  assert.equal(sc.emptyByF[W], 960, '白(1,1) 就近归属 960 空点');
+  assert.equal(sc.byF[B], 1); assert.equal(sc.byF[W], 961);
 });
 
 test('QA-05 数子法边界：单色独占整盘时全部空点归该色（单侧围住）', () => {
@@ -358,9 +358,11 @@ test('QA-06 不贴子：完全对称盘面双方等分 → 平局（黑先不加
   const w = seatedGo(601);
   const L = clearLife(w);
   const B = w.go.blackF, W = w.go.whiteF;
-  // 两块对称 2x2，距离同源；空区接触双色 → 中立
+  // 180° 旋转对称：黑块与白块关于盘心对称（(x,y)|→(31-x,31-y)），就近归属下双方等分。
+  // （口径变更说明：旧「严格围空」下任意两块 2×2 都因空区中立而 4:4 平局；
+  //   改就近归属后必须用**真旋转对称**盘面才能等分，故此处调整了白块位置。）
   L[3][3] = B; L[4][3] = B; L[3][4] = B; L[4][4] = B;
-  L[27][27] = W; L[26][27] = W; L[27][26] = W; L[26][26] = W;
+  L[28][28] = W; L[27][28] = W; L[28][27] = W; L[27][27] = W;
   const ev = [];
   w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
   w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
@@ -569,18 +571,25 @@ test('QA-12 认输方被剔除胜负池：即使盘面子多也不得被判胜',
   assert.equal(w.go.result.ranked.some(r => r.playerId === w.go.blackId), false, '认输方不入池');
 });
 
-test('QA-12 特征化：双方散点、空区连通且接触双色 → 绝大多数空点中立（口径已知，非 Bug）', () => {
-  // 记录并锁定架构 A11 的"≥2 阵营接触即中立"保守口径：
-  // 在 32x32 双方散点的真实局面里，围空几乎恒为 0，胜负≈子数之差。
-  // 该断言是**特征化（characterization）**：固化当前设计，若将来口径变更必须显式更新。
+test('QA-12 特征化（口径已更新）：双方散点 → 就近归属使双方各占地盘（不再全中立）', () => {
+  // 记录并锁定**新**口径（就近归属 / 势力范围）：散点局面下每个空点归「最近棋子」所属阵营，
+  // 因此双方都能围到大片地盘，胜负 = 子数 + 就近空点。
+  // ⚠️ 本断言是**特征化（characterization）**：固化当前设计。
+  //    （旧口径「≥2 阵营接触即中立」下，此盘面双方围空皆为 0、胜负≈子数差；
+  //     需求返工后改为就近归属，此断言随口径显式更新——见 tests/go_territory.test.mjs。）
   const w = seatedGo(1202);
   const L = clearLife(w);
   const B = w.go.blackF, W = w.go.whiteF;
   for (let y = 2; y < 30; y += 3) { L[5][y] = B; L[8][y] = B; L[11][y] = B; }
   for (let y = 2; y < 30; y += 3) { L[21][y] = W; L[24][y] = W; L[27][y] = W; }
   const sc = w._goScoreChinese();
-  assert.equal(sc.emptyByF[B] || 0, 0, '散点局面下黑无围空（空区接触双色→中立）');
-  assert.equal(sc.emptyByF[W] || 0, 0, '散点局面下白无围空');
-  assert.equal(sc.byF[B], sc.stoneByF[B], '黑总分 = 子数（无围空加分）');
-  assert.equal(sc.byF[W], sc.stoneByF[W], '白总分 = 子数');
+  assert.equal(sc.stoneByF[B], 30, '黑 30 子（10 行 × 3 列）');
+  assert.equal(sc.stoneByF[W], 30, '白 30 子');
+  assert.ok(sc.emptyByF[B] > 0, '散点局面下黑有就近地盘（>0）');
+  assert.ok(sc.emptyByF[W] > 0, '散点局面下白有就近地盘（>0）');
+  assert.equal(sc.emptyByF[B], 482, '黑就近归属 482 空点');
+  assert.equal(sc.emptyByF[W], 450, '白就近归属 450 空点');
+  assert.equal(sc.byF[B], 512, '黑总分 = 30 + 482');
+  assert.equal(sc.byF[W], 480, '白总分 = 30 + 450');
+  assert.equal(sc.byF[B] > sc.byF[W], true, '黑略领先（左半+中缝更开阔）');
 });

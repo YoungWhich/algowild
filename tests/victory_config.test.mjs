@@ -418,46 +418,47 @@ function seatedGo(seed = 42, opts) {
   return w;
 }
 
-test('VC-10 数子口径 = 子数 + 围住的空点（非 Voronoi 目数）', () => {
+test('VC-10 数子口径 = 子数 + 归属空点（就近归属，非 Voronoi 目数）', () => {
   const w = seatedGo(1);
   const L = w._life;
   const B = w.go.blackF, W = w.go.whiteF;
   // 清盘
   for (let x = 0; x < 32; x++) for (let y = 0; y < 32; y++) L[x][y] = 0;
-  // 黑在 (2,2) 放一颗，其 4-邻放白（围住 1 个空点？不，这里构造一个"被围住的空区"）
-  // 构造：黑围住 (3,3) 这一个空点 —— (3,3) 的 4-邻全是黑
+  // 黑在 (3,3) 四邻各一子；另加 2 颗孤立子（(10,10)/(20,20)）；白 1 子 (15,15)。
   L[3][3] = 0;
   L[2][3] = B; L[4][3] = B; L[3][2] = B; L[3][4] = B;
-  // 另外黑再放 2 颗孤立子
   L[10][10] = B; L[20][20] = B;
-  // 白放 1 颗
   L[15][15] = W;
   const sc = w._goScoreChinese();
-  assert.equal(sc.stoneByF[B], 6, '黑子数 = 4(围) + 2(孤) = 6');
+  // 子数不变（与口径无关）
+  assert.equal(sc.stoneByF[B], 6, '黑子数 = 4 + 2 = 6');
   assert.equal(sc.stoneByF[W], 1, '白子数 = 1');
-  assert.equal(sc.emptyByF[B], 1, '黑围住 (3,3) 一个空点');
-  assert.equal(sc.byF[B], 7, '黑数子总分 = 6 子 + 1 空点 = 7');
-  assert.equal(sc.byF[W], 1, '白数子总分 = 1 子 + 0 空点 = 1');
-  assert.equal(sc.black, 7);
-  assert.equal(sc.white, 1);
+  // 空点归属改为**就近归属**（旧「严格围空」口径下此处 emptyByF[B] 仅 1、emptyByF[W]=0）：
+  // 全盘 1024 格，黑 6 子空间上更靠近左侧/左下，白 1 子在 (15,15) 获右侧扇区。
+  assert.equal(sc.emptyByF[B], 591, '黑就近归属 591 个空点');
+  assert.equal(sc.emptyByF[W], 60, '白就近归属 60 个空点');
+  assert.equal(sc.byF[B], 597, '黑数子总分 = 6 子 + 591 空点 = 597');
+  assert.equal(sc.byF[W], 61, '白数子总分 = 1 子 + 60 空点 = 61');
+  assert.equal(sc.black, 597);
+  assert.equal(sc.white, 61);
 });
 
-test('VC-10 中立空区（边界接触 0 阵营 / ≥2 阵营）不计给任何方', () => {
+test('VC-10 就近归属：单色独占整盘全归该色；双色各按就近得分（旧「≥2 接触即中立」已废弃）', () => {
   const w = seatedGo(2);
   const L = w._life;
   const B = w.go.blackF, W = w.go.whiteF;
   for (let x = 0; x < 32; x++) for (let y = 0; y < 32; y++) L[x][y] = 0;
-  // 空区（整盘）接触 0 阵营 → 中立（这里盘上放一颗黑，则空区接触 1 阵营 → 全归黑）
+  // 盘上仅一色黑（(5,5)）→ 每个空点最近棋子都是黑 → 全部空点归黑。
   L[5][5] = B;
   const sc1 = w._goScoreChinese();
-  assert.equal(sc1.emptyByF[B], 32 * 32 - 1, '整盘仅一色时，所有空点归该色（单侧围住）');
-  // 黑白各放一子 → 空区接触 2 阵营 → 中立
+  assert.equal(sc1.emptyByF[B], 32 * 32 - 1, '整盘仅一色时，所有空点归该色（就近归属）');
+  // 黑白各放一子 → 空点按「距离最近棋子」就近切分（不再一律中立）。
   L[25][25] = W;
   const sc2 = w._goScoreChinese();
-  assert.equal(sc2.emptyByF[B] || 0, 0, '接触两阵营的空区中立（不给黑）');
-  assert.equal(sc2.emptyByF[W] || 0, 0, '接触两阵营的空区中立（不给白）');
-  assert.equal(sc2.byF[B], 1, '黑仅剩 1 子');
-  assert.equal(sc2.byF[W], 1, '白仅剩 1 子');
+  assert.equal(sc2.emptyByF[B], 434, '左下扇区（近 (5,5)）归黑 434 空点');
+  assert.equal(sc2.emptyByF[W], 485, '其余扇区（近 (25,25)）归白 485 空点');
+  assert.equal(sc2.byF[B], 435, '黑 = 1 子 + 434 空点');
+  assert.equal(sc2.byF[W], 486, '白 = 1 子 + 485 空点');
 });
 
 test('VC-10 双方连续 Pass → 终局 → 数子 X vs Y，唯一最高者胜', () => {
@@ -465,15 +466,19 @@ test('VC-10 双方连续 Pass → 终局 → 数子 X vs Y，唯一最高者胜'
   const L = w._life;
   const B = w.go.blackF, W = w.go.whiteF;
   for (let x = 0; x < 32; x++) for (let y = 0; y < 32; y++) L[x][y] = 0;
-  // 黑多子（明显领先）
-  L[3][3] = B; L[4][3] = B; L[3][4] = B; L[4][4] = B;
-  L[10][10] = W;
+  // 黑占据中央 4×4 大块（16 子），白仅角落 2 子 → 黑在**就近归属**下空间与势力全面领先。
+  // （口径变更说明：旧「严格围空」下曾用「黑 2×2 于 (3,3) + 白 1 子在 (10,10)」构造黑领先；
+  //   改就近归属后，单个靠近中央的白子会吸走大半个棋盘，故改用更贴合当前口径的领先局面。）
+  for (let x = 14; x <= 17; x++) for (let y = 14; y <= 17; y++) L[x][y] = B;
+  L[0][0] = W; L[1][0] = W;
   const ev = [];
   assert.equal(w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev).ok, true);
   assert.equal(w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev).ok, true);
   assert.ok(w.go.result, '双方各 Pass 一次 → 终局');
   assert.equal(w.go.result.reason, 'pass');
-  // 黑数子 = 4 子 + 围住空点；白 = 1 子
+  // 黑数子 = 16 子 + 887 空点 = 903；白 = 2 子 + 117 空点 = 119。
+  assert.equal(w.go.result.blackScore, 903, '黑数子 903');
+  assert.equal(w.go.result.whiteScore, 119, '白数子 119');
   assert.ok(w.go.result.blackScore > w.go.result.whiteScore, '黑数子领先');
   assert.equal(w.go.result.winner, w.go.blackId, '唯一最高者（黑）胜');
   assert.equal(w.players[w.go.blackId].won, true);
@@ -485,15 +490,18 @@ test('VC-10 数子并列 → 平局（winner=null，不贴子）', () => {
   const L = w._life;
   const B = w.go.blackF, W = w.go.whiteF;
   for (let x = 0; x < 32; x++) for (let y = 0; y < 32; y++) L[x][y] = 0;
-  // 双方对称各 4 子，空区接触两阵营 → 中立 → 4:4 平局
+  // 180° 旋转对称：黑的 2×2 与白的 2×2 关于盘心 (15.5,15.5) 完全对称
+  // （(x,y)|→(31-x,31-y) 把黑块映射为白块）→ 就近归属下双方等分。
+  // （口径变更说明：旧「严格围空」下此处双方空点皆 0 亦成平局；改就近归属后须用真旋转对称盘才等分。）
   L[3][3] = B; L[4][3] = B; L[3][4] = B; L[4][4] = B;
-  L[25][25] = W; L[26][25] = W; L[25][26] = W; L[26][26] = W;
+  L[28][28] = W; L[27][28] = W; L[28][27] = W; L[27][27] = W;
   const ev = [];
   w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
   w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
   assert.ok(w.go.result);
-  assert.equal(w.go.result.blackScore, 4);
-  assert.equal(w.go.result.whiteScore, 4);
+  assert.equal(w.go.result.blackScore, 484, '黑数子 484（4 子 + 480 空点）');
+  assert.equal(w.go.result.whiteScore, 484, '白数子 484（4 子 + 480 空点）');
+  assert.equal(w.go.result.blackScore, w.go.result.whiteScore, '对称盘面两边等分');
   assert.equal(w.go.result.winner, null, '并列 → 平局');
   assert.equal(w.players[w.go.blackId].won, false);
   assert.equal(w.players[w.go.whiteId].won, false);
@@ -538,16 +546,15 @@ test('VC-10 snapshot.go.chineseScore 明细存在（子数 + 空点）', () => {
   const L = w._life;
   const B = w.go.blackF, W = w.go.whiteF;
   for (let x = 0; x < 32; x++) for (let y = 0; y < 32; y++) L[x][y] = 0;
-  // 黑围住 (3,3) 一个空点（4 邻全黑）；另在 (0,0) 放白，
-  // 使"盘面其余大空区"同时接触黑白两色 → 中立，不计给任何一方。
+  // 黑围住 (3,3) 一个空点（4 邻全黑）；另在 (0,0) 放白。就近归属下黑（4 子聚于角落）吸走绝大部分空点。
   L[3][3] = 0; L[2][3] = B; L[4][3] = B; L[3][2] = B; L[3][4] = B;
   L[0][0] = W;
   const cs = w.snapshot().go.chineseScore;
   assert.ok(cs, 'chineseScore 应存在');
   const row = cs.ranked.find(r => r.faction === B);
   assert.equal(row.stones, 4, '子数明细 = 4');
-  assert.equal(row.empty, 1, '围住空点明细 = 1（大空区因接触两色而中立）');
-  assert.equal(row.score, 5, '总分 = 5');
+  assert.equal(row.empty, 1014, '就近归属空点明细 = 1014');
+  assert.equal(row.score, 1018, '总分 = 4 + 1014 = 1018');
 });
 
 test('VC-10 _goScore（Voronoi）保留不动（旧快照字段不炸）', () => {

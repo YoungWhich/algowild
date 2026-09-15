@@ -678,10 +678,15 @@ export function installGoMode(World) {
   // ---------- 中国规则数子（子数 + 围住的空点数）· 终局胜负依据 ----------
 
   /**
-   * 4-邻浮空围空：把盘面所有"连通空区"用洪水填充找出，按 4-邻接触到的阵营去重。
+   * 4-邻浮空围空（**严格围空口径**）：把盘面所有"连通空区"用洪水填充找出，按 4-邻接触到的阵营去重。
    * 恰好 1 个阵营接触 → 该空区全归它（= 被围住的空点）；接触 0 或 ≥2 个阵营 → 中立。
    * 棋盘边界**不算**归属方（越界不计），避免把"棋盘外"误判为围住。
    * 纯函数、无随机、O(W²)：只在终局调用一次，非 tick 内。
+   *
+   * ⚠️ 口径说明（2026-09 需求返工）：本函数是**旧的「严格围空」口径**（仿围棋：只有被单一阵营
+   *   完全围住的空区才归属）。实测在散点局面下 1024 格里有 964 格判中立、双方围空皆为 0，胜负
+   *   退化为"谁落子多"，地盘毫无意义。**已不再用于胜负判定**（_goScoreChinese → _goNearestEmpty）。
+   *   此处**保留不删**，仅供对照 / 向后兼容 / 既有 QA（board_editor.qa.test.mjs QA-GO-2）引用。
    * @returns {{byF:Object<number,number>}} faction -> 被该阵营围住的空点数
    */
   P._goEnclosedEmpty = function _goEnclosedEmpty() {
@@ -720,7 +725,93 @@ export function installGoMode(World) {
   };
 
   /**
-   * 中国规则数子：己方棋子数 + 己方围住的空点数（多者胜，不贴子）。纯函数、无随机、O(W²)。
+   * 就近归属（势力范围）空点归属：每个**空点**归属「距离它最近的棋子」所属阵营。
+   * 距离 = 4 邻步数（曼哈顿 / 网格步，多源 BFS 求得）。
+   *   · 若存在**两个及以上不同阵营**的棋子同时达到最小距离 → 该空点**中立**；
+   *   · 若某空点**无法到达任何棋子**（被墙完全隔开等）→ 中立；
+   *   · 棋子格本身**不参与**空点归属，只作为 BFS 源点。
+   * 实现：对盘面上每个"有子的阵营"各跑一次多源 BFS（源 = 该阵营全部棋子），只向空点扩散
+   *      （**不穿墙格、不穿棋子格**）；维护 bestDist（最短距离）与 bestOwn（唯一归属），
+   *      对每个空点：d < bestDist → 取该阵营；d === bestDist 且阵营不同 → 置中立（0）。
+   * 复杂度 O(F · W²)（F ≤ 8，W = 32），只在终局调用一次，完全可接受。
+   * 纯函数、无随机（禁 Math.random / Date.now）。
+   * @returns {{byF:Object<number,number>}} faction -> 归属该阵营的空点数
+   */
+  P._goNearestEmpty = function _goNearestEmpty() {
+    const W = World.LIFE_W, L = this._life;
+    const N = W * W;
+    const byF = Object.create(null);
+    // ① 收集盘面上所有出现过的棋子阵营（= BFS 源阵营）。空盘 → 无源 → 直接返回（全中立）。
+    const factions = new Set();
+    for (let x = 0; x < W; x++) {
+      const col = L[x];
+      for (let y = 0; y < W; y++) {
+        const v = col[y];
+        if (v > 0) factions.add(v);
+      }
+    }
+    if (factions.size === 0) return { byF };
+    // ② 归属网格：bestDist[k] = 到最近棋子的步数（-1 = 尚未被任何阵营到达）；
+    //    bestOwn[k] = 唯一归属阵营（0 = 中立：等距多阵营 / 不可达）。
+    const bestDist = new Int16Array(N).fill(-1);
+    const bestOwn = new Int8Array(N);
+    const dist = new Int16Array(N);            // 单次 BFS 复用：当前阵营到各格的距离
+    const queue = new Int32Array(N);           // BFS 顺序队列（每格至多入队一次，无需环形）
+    for (const f of factions) {
+      dist.fill(-1);
+      let head = 0, tail = 0;
+      // 多源：把该阵营的**全部棋子**入队（距离 0）。棋子只作源点，本身不计入空点归属。
+      for (let x = 0; x < W; x++) {
+        const col = L[x];
+        for (let y = 0; y < W; y++) {
+          if (col[y] === f) { const k = x * W + y; dist[k] = 0; queue[tail++] = k; }
+        }
+      }
+      // 向空点扩散：不穿墙（越界 / 形状外 / 虚空），不穿棋子格（只向值为 0 的格前进）。
+      while (head < tail) {
+        const k = queue[head++];
+        const cx = (k / W) | 0, cy = k % W;
+        const d = dist[k];
+        for (const [dx, dy] of NEI4) {
+          const nx = cx + dx, ny = cy + dy;
+          if (this._isWall(nx, ny)) continue;   // 墙格（含越界）不可穿越
+          if (L[nx][ny] !== 0) continue;        // 棋子格不可穿越（只扩散到空点）
+          const nk = nx * W + ny;
+          if (dist[nk] !== -1) continue;        // 已访问
+          dist[nk] = d + 1;
+          queue[tail++] = nk;
+        }
+      }
+      // 汇总：对每个该阵营可达的空点，按"更近者得、等距者中立"更新唯一归属（顺序无关）。
+      for (let x = 0; x < W; x++) {
+        const col = L[x];
+        for (let y = 0; y < W; y++) {
+          if (col[y] !== 0) continue;           // 仅统计空点
+          const k = x * W + y;
+          const d = dist[k];
+          if (d < 0) continue;                  // 该阵营到不了此空点
+          const bd = bestDist[k];
+          if (bd < 0 || d < bd) { bestDist[k] = d; bestOwn[k] = f; }
+          else if (d === bd && bestOwn[k] !== f) { bestOwn[k] = 0; }   // 等距多阵营 → 中立
+        }
+      }
+    }
+    // ③ 计分：归属非零的空点数（墙格非空点，天然被上面的 col[y] !== 0 排除）。
+    for (let x = 0; x < W; x++) {
+      const col = L[x];
+      for (let y = 0; y < W; y++) {
+        if (col[y] !== 0) continue;
+        const o = bestOwn[x * W + y];
+        if (o) byF[o] = (byF[o] || 0) + 1;
+      }
+    }
+    return { byF };
+  };
+
+  /**
+   * 中国规则数子：己方棋子数 + 己方归属的空点数（多者胜，不贴子）。纯函数、无随机、O(W²)。
+   * 空点归属口径 = **就近归属（势力范围）**：空点归「距离它最近的棋子」所属阵营，等距则中立
+   * （见 _goNearestEmpty）。子数逻辑不变。
    * 与 _goScore()（Voronoi 归属目数，保留给 rts-go 快照 / 旧口径）语义不同 —— 本函数才是
    * go 终局胜负依据。
    * @returns {{byF:Object<number,number>, black:number, white:number,
@@ -736,7 +827,7 @@ export function installGoMode(World) {
         if (v > 0) stoneByF[v] = (stoneByF[v] || 0) + 1;   // 子数（go 盘只有 1..8）
       }
     }
-    const { byF: emptyByF } = this._goEnclosedEmpty();     // 空点归属
+    const { byF: emptyByF } = this._goNearestEmpty();      // 空点归属（就近归属 / 势力范围）
     const byF = Object.create(null);
     const keys = new Set([...Object.keys(stoneByF), ...Object.keys(emptyByF)]);
     for (const k of keys) byF[k] = (stoneByF[k] || 0) + (emptyByF[k] || 0);
