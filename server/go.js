@@ -873,7 +873,7 @@ export function installGoMode(World) {
       return {
         playerId: pid, faction: f, name: p ? p.name : String(pid),
         isAI: !!(p && p.isAI), botControlled: !!(p && p.botControlled), lost: !!(p && p.lost),
-        lostReason: (p && p.lostReason) || null,             // 'resign' | ...（go 模式被吃光不出局）
+        lostReason: (p && p.lostReason) || null,
         score: byF[f] || 0,                                  // 数子总分
         stones: stoneByF[f] || 0,                            // 明细：子数
         empty: emptyByF[f] || 0,                             // 明细：围住空点
@@ -908,7 +908,7 @@ export function installGoMode(World) {
     }
     if (endReason) { this._goFinish(endReason, events); return; }
 
-    // 轮到下一位（跳过已出局者——go 模式下「出局」只来自认输 resign，被吃光不出局）
+    // 轮到下一位（跳过已认输者）
     let step = 0;
     do {
       g.turnIdx = (g.turnIdx + 1) % seats.length;
@@ -923,19 +923,17 @@ export function installGoMode(World) {
   };
 
   /**
-   * 终局结算：按**中国规则数子**（子数 + 围住空点）排名，唯一最高者胜（并列则平局，不贴子）。
-   * 胜利线【领土】关闭时（含全关）→ 不宣告任何胜者（winner=null），只出明细。
+   * 终局结算：按中国规则数子（子数 + 归属空点）排名，唯一最高者胜，并列平局，不贴子。
+   * 胜利线【领土】关闭时 → winner=null，只出明细。
    * @param {string} reason 终局原因（pass / max_moves / timeout / resign）
    * @param {object[]} events
    */
   P._goFinish = function _goFinish(reason, events) {
     const g = this._goInit();
-    const sc = this._goScoreChinese();          // ← 中国规则数子（取代 Voronoi 目数 _goScore）
-    // 参与胜负比较的池：剔除「弃权类出局」（认输 resign——已主动放弃，绝不应判胜）。
-    // go 模式下被吃光**不出局**（lost 恒 false），其盘面 0 子 ⇒ 数子恒为 0、自然排末位，
-    // 永远不会反超任何正分；只有认输（lost=true）才会被剔除出胜负池。
+    const sc = this._goScoreChinese();
+    // 胜负池剔除认输方；被吃光方不出局，数子为 0 自然排末位。
     const pool = sc.ranked.filter(r => !r.lost);
-    const eff = pool.length ? pool : sc.ranked;   // 全员弃权等极端情况退化为全席位排名
+    const eff = pool.length ? pool : sc.ranked;
     let winner = null;
     // 胜利线【领土】开着才宣告胜者；关掉 → winner=null（E6/VC-02）。
     // go 模式下 victoryLines 恒只含 territory（引擎/归一已 gate），此处只需读 territory。
@@ -1050,8 +1048,7 @@ export function installGoMode(World) {
     const pid = (g.seats && g.seats[g.turnIdx] != null) ? g.seats[g.turnIdx] : null;
     const p = pid != null ? this.players[pid] : null;
     if (!p) return false;
-    // 已出局（认输 resign）的 AI 不再出手——换手逻辑本应跳过它，此处兜底防御。
-    // （go 模式被吃光不出局，故 lost 只会来自认输。）
+    // 已认输的 AI 不再出手
     if (p.lost) return false;
     // "电脑驱动" = 原生 AI 或 掉线被接管
     if (!(p.isAI === true || p.botControlled === true)) return false;

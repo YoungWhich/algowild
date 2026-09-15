@@ -173,25 +173,25 @@ test('GT-06 被吃光方分数恒 0、不出局、永不反超（胜负由数子
   const B = w.go.blackF, W = w.go.whiteF;
   L[20][20] = W; L[21][20] = W; L[20][21] = W; L[21][21] = W;   // 白 4 子
   const pB = w.players[w.go.blackId];
-  pB.maxLifeCells = 6; pB.lifeCells = 0;                        // 黑曾被吃光
+  pB.maxLifeCells = 6; pB.lifeCells = 0;
 
   const sc = w._goScoreChinese();
   assert.equal(sc.stoneByF[B] || 0, 0, '黑 0 子');
   assert.equal(sc.emptyByF[B] || 0, 0, '黑无子 → 无 BFS 源 → 0 地盘');
-  assert.equal(sc.byF[B] || 0, 0, '黑数子恒 0，不可能反超任何正分');
+  assert.equal(sc.byF[B] || 0, 0, '黑数子恒 0');
 
   const ev = [];
   w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
   assert.equal(w.go.result, null, '被吃光不触发终局');
-  assert.equal(pB.lost, false, '被吃光方不出局（lost=false）');
-  // 双方连续停手 → 终局
+  assert.equal(pB.lost, false, '被吃光方不出局');
+  // 双方停手 → 终局
   w.applyGoIntent(w.go.seats[w.go.turnIdx], { pass: true }, ev);
   assert.ok(w.go.result, '双方停手后终局');
   assert.equal(w.go.result.reason, 'pass');
   const rankedB = w.go.result.ranked.find(r => r.playerId === w.go.blackId);
   assert.ok(rankedB, '被吃光方仍在胜负池中');
   assert.equal(rankedB.score, 0, '被吃光方数子 = 0');
-  assert.equal(w.go.result.winner, w.go.whiteId, '白数子多者胜（非「清盘者对手无条件胜」）');
+  assert.equal(w.go.result.winner, w.go.whiteId, '白数子多者胜');
   assert.ok(w.go.result.whiteScore > w.go.result.blackScore);
 });
 
