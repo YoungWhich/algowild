@@ -29,6 +29,12 @@ async function setupApp() {
   return app;
 }
 
+// settings 现已扩展 victoryLines/victoryThresholds/availableLines（房主可配置胜利条件）；
+// 本文件只关心既有两字段，故抽取后比对（保持原断言语义，不因新增字段而误报）。
+function pickSettings(s) {
+  return { stonesPerTurn: s.stonesPerTurn, lonelyDeathDelay: s.lonelyDeathDelay };
+}
+
 let seq = 0;
 function newUser(prefix = 'u') {
   const name = prefix + '_' + Date.now() + '_' + (seq++);
@@ -158,7 +164,7 @@ test('RS-04 POST /worlds 后 snapshot().settings 与请求一致', async () => {
   const inst = activeWorlds.get(worldId);
   assert.ok(inst, '世界应挂到 activeWorlds');
   const snap = inst.snapshot();
-  assert.deepEqual(snap.settings, { stonesPerTurn: 8, lonelyDeathDelay: 4 }, 'snapshot().settings 应与请求一致');
+  assert.deepEqual(pickSettings(snap.settings), { stonesPerTurn: 8, lonelyDeathDelay: 4 }, 'snapshot().settings 应与请求一致');
   assert.ok(Array.isArray(snap.lifeHits), 'snapshot().lifeHits 应为数组（契约）');
   // go 快照也应反映每回合可落子数
   assert.equal(snap.go.stonesPerTurn, 8, 'go.stonesPerTurn 应与设置一致');
@@ -178,7 +184,7 @@ test('RS-05 房间建世界后 snapshot().settings 与房间设置一致', async
   const worldId = w.body.data.worldId;
   const inst = activeWorlds.get(worldId);
   assert.ok(inst, '世界应在 activeWorlds');
-  assert.deepEqual(inst.snapshot().settings, { stonesPerTurn: 6, lonelyDeathDelay: 3 }, '快照设置应与房间一致');
+  assert.deepEqual(pickSettings(inst.snapshot().settings), { stonesPerTurn: 6, lonelyDeathDelay: 3 }, '快照设置应与房间一致');
   // 房间详情（世界为权威）也应为 6/3
   const info = await call(app, 'GET', `/api/rooms/${code}`, null, host.token);
   assert.equal(info.body.data.stonesPerTurn, 6);
@@ -205,7 +211,7 @@ test('RS-06 世界被移除后按 seed 重建，设置不丢', async () => {
   assert.equal(j.body.data.worldId, worldId, '应恢复到同一个 worldId');
   const reborn = activeWorlds.get(worldId);
   assert.ok(reborn, '重建后的世界应在 activeWorlds');
-  assert.deepEqual(reborn.snapshot().settings, { stonesPerTurn: 9, lonelyDeathDelay: 5 }, '重建后设置不丢');
+  assert.deepEqual(pickSettings(reborn.snapshot().settings), { stonesPerTurn: 9, lonelyDeathDelay: 5 }, '重建后设置不丢');
 });
 
 // ------------------------------------------------------------------ RS-07 备用重建路径不丢设置/不污染
@@ -223,13 +229,13 @@ test('RS-07 GET /worlds/:id 不丢设置且不污染 activeWorlds（随后 /join
   activeWorlds.delete(worldId);
   const snap = await call(app, 'GET', `/api/worlds/${worldId}`, null, host.token);
   assert.equal(snap.body.code, 0);
-  assert.deepEqual(snap.body.data.settings, { stonesPerTurn: 9, lonelyDeathDelay: 5 },
+  assert.deepEqual(pickSettings(snap.body.data.settings), { stonesPerTurn: 9, lonelyDeathDelay: 5 },
     'GET /worlds/:id 重建必须带上房间设置 9/5（不得默认 3/0）');
 
   // 不得把默认设置的世界缓存进 activeWorlds
   const cached = activeWorlds.get(worldId);
   assert.ok(cached, '重建的世界应缓存进 activeWorlds');
-  assert.deepEqual(cached.snapshot().settings, { stonesPerTurn: 9, lonelyDeathDelay: 5 },
+  assert.deepEqual(pickSettings(cached.snapshot().settings), { stonesPerTurn: 9, lonelyDeathDelay: 5 },
     'activeWorlds 缓存不得被默认值污染');
 
   // 随后 /join 仍必须是 9/5（验证"先 GET /worlds/:id 再 join"不被默认值带偏）
@@ -237,7 +243,7 @@ test('RS-07 GET /worlds/:id 不丢设置且不污染 activeWorlds（随后 /join
   const j = await call(app, 'POST', `/api/rooms/${code}/join`, {}, guest.token);
   assert.equal(j.body.code, 0, '重启后应能加入');
   assert.equal(j.body.data.worldId, worldId, '应恢复到同一世界');
-  assert.deepEqual(activeWorlds.get(worldId).snapshot().settings, { stonesPerTurn: 9, lonelyDeathDelay: 5 },
+  assert.deepEqual(pickSettings(activeWorlds.get(worldId).snapshot().settings), { stonesPerTurn: 9, lonelyDeathDelay: 5 },
     '/join 后设置仍为 9/5');
 });
 
@@ -266,9 +272,9 @@ test('RS-08 settings 在四条路径一致（房间视图 / 大厅 / /worlds/:id
 
   // ③ /worlds/:id（HTTP 快照）
   const snap = await call(app, 'GET', `/api/worlds/${worldId}`, null, host.token);
-  assert.deepEqual(snap.body.data.settings, { stonesPerTurn: 6, lonelyDeathDelay: 3 }, '③ /worlds/:id settings=6/3');
+  assert.deepEqual(pickSettings(snap.body.data.settings), { stonesPerTurn: 6, lonelyDeathDelay: 3 }, '③ /worlds/:id settings=6/3');
 
   // ④ WS 快照（WS snap 的 payload 就是 activeWorlds.snapshot()）
-  assert.deepEqual(activeWorlds.get(worldId).snapshot().settings, { stonesPerTurn: 6, lonelyDeathDelay: 3 },
+  assert.deepEqual(pickSettings(activeWorlds.get(worldId).snapshot().settings), { stonesPerTurn: 6, lonelyDeathDelay: 3 },
     '④ WS 快照 settings=6/3');
 });

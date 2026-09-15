@@ -124,6 +124,9 @@ function migrate() {
     // 房间玩法设置（旧库补列；新库已在 schema.sql 内含，重复执行报错被忽略）
     'ALTER TABLE rooms ADD COLUMN stones_per_turn INTEGER',
     'ALTER TABLE rooms ADD COLUMN lonely_death_delay INTEGER',
+    // 胜利条件（房主可配置；JSON 串；旧库补列）
+    'ALTER TABLE rooms ADD COLUMN victory_lines TEXT',
+    'ALTER TABLE rooms ADD COLUMN victory_thresholds TEXT',
     // 管理员控制台：users 新列（旧文件库补列；新库已在 schema.sql 内含，重复执行报错被忽略）
     "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'player'",
     'ALTER TABLE users ADD COLUMN banned INTEGER NOT NULL DEFAULT 0',
@@ -322,7 +325,7 @@ export const worldsRepo = {
 export const roomsRepo = {
   // 建房：world_id 用 '' 占位表示"尚未建立世界"（先建房后建世界）。
   create: (code, worldId, ownerId, maxPlayers, opts) => db().run(
-    'INSERT INTO rooms(code,world_id,owner_id,max_players,visibility,passhash,name,mode,stones_per_turn,lonely_death_delay,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+    'INSERT INTO rooms(code,world_id,owner_id,max_players,visibility,passhash,name,mode,stones_per_turn,lonely_death_delay,victory_lines,victory_thresholds,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
     [
       code, worldId || '', ownerId, maxPlayers,
       (opts && opts.visibility) || 'public',
@@ -332,6 +335,9 @@ export const roomsRepo = {
       // 设置列：调用方已做范围钳制；缺失存 NULL（读取时回退默认）
       (opts && Number.isInteger(opts.stonesPerTurn)) ? opts.stonesPerTurn : null,
       (opts && Number.isInteger(opts.lonelyDeathDelay)) ? opts.lonelyDeathDelay : null,
+      // 胜利条件：对象 → JSON 串；缺失存 NULL（hydrate 时回默认）
+      (opts && opts.victoryLines) ? JSON.stringify(opts.victoryLines) : null,
+      (opts && opts.victoryThresholds) ? JSON.stringify(opts.victoryThresholds) : null,
       Date.now(),
     ]
   ),
@@ -340,6 +346,15 @@ export const roomsRepo = {
   // 按 worldId 反查房间（未关闭的最新一间）：供 ensureWorld 重建时带上房间设置，避免静默重置。
   byWorld: (worldId) => db().get('SELECT * FROM rooms WHERE world_id=? AND closed_at IS NULL ORDER BY created_at DESC LIMIT 1', [worldId]),
   setWorld: (code, worldId, mode) => db().run('UPDATE rooms SET world_id=?, mode=? WHERE code=?', [worldId, mode || null, code]),
+  // 中途改配置（仅房主；调用方已归一化）：写胜利条件两列（JSON 串）。
+  setSettings: (code, s) => db().run(
+    'UPDATE rooms SET victory_lines=?, victory_thresholds=? WHERE code=?',
+    [
+      (s && s.victoryLines) ? JSON.stringify(s.victoryLines) : null,
+      (s && s.victoryThresholds) ? JSON.stringify(s.victoryThresholds) : null,
+      code,
+    ]
+  ),
   close: (code) => db().run('UPDATE rooms SET closed_at=? WHERE code=?', [Date.now(), code]),
   active: () => db().all('SELECT * FROM rooms WHERE closed_at IS NULL ORDER BY created_at DESC LIMIT 50'),
   publicOpen: () => db().all("SELECT * FROM rooms WHERE closed_at IS NULL AND visibility='public' ORDER BY created_at DESC LIMIT 50"),

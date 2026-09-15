@@ -61,6 +61,11 @@ export class World {
     // lonelyDeathDelay：无法存活的孤子"还能撑几个回合才死"（默认 0 = 立即死，恢复标准康威）。
     this.lonelyDeathDelay = World._clampInt(
       opts && opts.lonelyDeathDelay, World.LONELY_DEATH_DELAY_DEFAULT, 0, World.LONELY_DEATH_DELAY_MAX);
+    // ---- 房主可配置的胜利条件（constructor 侧双保险：rooms.js 已归一，这里再取一次）----
+    // victoryLines：4 个布尔开关（默认仅 territory）；go 模式强制只保留 territory。
+    this.victoryLines = World.normVictoryLines(opts && opts.victoryLines, this.mode);
+    // victoryThresholds：rts 各线门槛（默认 = 原硬编码常量；go 不消费但仍透传存储）。
+    this.victoryThresholds = World.normVictoryThresholds(opts && opts.victoryThresholds);
     this._rng = mulberry32(this.seed);
     this.tick = 0;
     this.oxic = false;   // 世界含氧量：无氧纪（发酵）→ 大氧化事件 → 有氧纪（生物呼吸的能源革命）
@@ -697,6 +702,66 @@ export class World {
   // 死亡宽限：孤子这种无法永久存活的单位，可设置"撑几个回合才死"（默认 0 = 立即死）。
   static LONELY_DEATH_DELAY_DEFAULT = 0;
   static LONELY_DEATH_DELAY_MAX = 10;
+  // ---- 胜利线开关族（房主可配置；唯一事实源，三端共用）----
+  // 键集；默认仅【领土】（避免"开局一方被秒 → 另一方立刻胜"的意外）。
+  static VICTORY_LINE_KEYS = ['territory', 'economy', 'singularity', 'survival'];
+  static VICTORY_LINE_DEFAULT = { territory: true, economy: false, singularity: false, survival: false };
+  // 按模式可用的开关集：rts 4 条；go 仅【领土】（"吃光不算赢"→ go 无 survival）。
+  static VICTORY_AVAILABLE = {
+    rts: ['territory', 'economy', 'singularity', 'survival'],
+    go: ['territory'],
+  };
+  // 门槛安全区间 [lo, hi]；默认值 = 原硬编码常量（不传时数值与现状一致）。
+  static VICTORY_THRESHOLD_SPEC = {
+    territoryRegions: { dflt: 16, lo: 6, hi: 40 },      // 原 World.TERRITORY_WIN = 16
+    economyLead: { dflt: 600, lo: 200, hi: 2000 },      // 原字面量 600
+    economyHoldTicks: { dflt: 1800, lo: 300, hi: 6000 },// 原字面量 1800
+    singularityThreshold: { dflt: 30, lo: 6, hi: 200 }, // 原字面量 30
+    deathLimit: { dflt: 12, lo: 3, hi: 50 },            // 原 World.DEATH_LIMIT = 12
+  };
+  /**
+   * 该模式下可用的胜利线键集（副本，避免调用方误改常量）。
+   * @param {('rts'|'go'|null|undefined)} mode
+   * @returns {string[]}
+   */
+  static availableLines(mode) {
+    const list = World.VICTORY_AVAILABLE[mode] || World.VICTORY_AVAILABLE.rts;
+    return list.slice();
+  }
+  /**
+   * 胜利线归一：非对象/非法 JSON → 默认；逐键仅接受 boolean；go 下强制关闭不可用线（防越权）。
+   * @param {object|string|null|undefined} v
+   * @param {('rts'|'go'|null|undefined)} mode
+   * @returns {{territory:boolean, economy:boolean, singularity:boolean, survival:boolean}}
+   */
+  static normVictoryLines(v, mode) {
+    let o = v;
+    if (typeof o === 'string') { try { o = JSON.parse(o); } catch (e) { o = null; } }
+    const out = { ...World.VICTORY_LINE_DEFAULT };
+    if (o && typeof o === 'object') {
+      for (const k of World.VICTORY_LINE_KEYS) if (typeof o[k] === 'boolean') out[k] = o[k];
+    }
+    // 模式门禁：go 只允许 territory。
+    const allow = World.VICTORY_AVAILABLE[mode] || World.VICTORY_AVAILABLE.rts;
+    for (const k of World.VICTORY_LINE_KEYS) if (!allow.includes(k)) out[k] = false;
+    return out;
+  }
+  /**
+   * rts 门槛归一：逐字段 _clampInt 到安全区间；非数字/空/非法 JSON → 默认。
+   * @param {object|string|null|undefined} v
+   * @returns {{territoryRegions:number, economyLead:number, economyHoldTicks:number,
+   *            singularityThreshold:number, deathLimit:number}}
+   */
+  static normVictoryThresholds(v) {
+    let o = v;
+    if (typeof o === 'string') { try { o = JSON.parse(o); } catch (e) { o = null; } }
+    const out = {};
+    for (const [k, spec] of Object.entries(World.VICTORY_THRESHOLD_SPEC)) {
+      const raw = (o && typeof o === 'object') ? o[k] : undefined;
+      out[k] = World._clampInt(typeof raw === 'string' ? Number(raw) : raw, spec.dflt, spec.lo, spec.hi);
+    }
+    return out;
+  }
   // 棋子近战吞噬：强细胞累积到该伤害即被击碎。
   static CELL_ATK_HP = 3;
   // 把可空值收敛为 [lo,hi] 的整数，非法输入回落到默认值。
@@ -1357,47 +1422,61 @@ export class World {
   _checkVictoryConditions(events) {
     const ps = Object.values(this.players).filter(p => !p.lost);
     if (ps.length === 0) return;
-    // Singularity: each player has 6 resources at >= 30 (raised from 20 -> mid-game goal)
-    const SINGULARITY_THRESHOLD = 30;
-    for (const p of ps) {
-      if (p.won) continue;
-      const stock = p._stock || { wood: 0, stone: 0, ore: 0, crystal: 0, food: 0, shard: 0 };
-      if (stock.wood >= SINGULARITY_THRESHOLD && stock.stone >= SINGULARITY_THRESHOLD && stock.ore >= SINGULARITY_THRESHOLD && stock.crystal >= SINGULARITY_THRESHOLD && stock.food >= SINGULARITY_THRESHOLD && stock.shard >= SINGULARITY_THRESHOLD) {
-        p.won = true; p.winReason = 'singularity';
-        events.push({ type: 'victory', playerId: p.id, reason: 'singularity' });
+    // 房主可配置的开关与门槛（缺失时回退默认；默认门槛 = 原硬编码常量，保证数值不传时不变）。
+    const V = this.victoryLines || World.VICTORY_LINE_DEFAULT;
+    const T = this.victoryThresholds || World.normVictoryThresholds(null);
+    // Singularity: each player has 6 resources at >= threshold (raised from 20 -> mid-game goal)
+    if (V.singularity) {
+      const SINGULARITY_THRESHOLD = T.singularityThreshold;
+      for (const p of ps) {
+        if (p.won) continue;
+        const stock = p._stock || { wood: 0, stone: 0, ore: 0, crystal: 0, food: 0, shard: 0 };
+        if (stock.wood >= SINGULARITY_THRESHOLD && stock.stone >= SINGULARITY_THRESHOLD && stock.ore >= SINGULARITY_THRESHOLD && stock.crystal >= SINGULARITY_THRESHOLD && stock.food >= SINGULARITY_THRESHOLD && stock.shard >= SINGULARITY_THRESHOLD) {
+          p.won = true; p.winReason = 'singularity';
+          events.push({ type: 'victory', playerId: p.id, reason: 'singularity' });
+        }
       }
     }
-    // Territory: reach empire era AND own >= TERRITORY_WIN regions.
+    // Territory: reach empire era AND own >= T.territoryRegions regions.
     // Requiring the era means you must GROW before you can win — this is what
     // stretches a match to minutes instead of seconds.
-    for (const p of ps) {
-      if (p.won) continue;
-      if ((p.era || 0) >= 3 && (p.regionsOwned || 0) >= World.TERRITORY_WIN) {
-        p.won = true; p.winReason = 'territory';
-        events.push({ type: 'victory', playerId: p.id, reason: 'territory' });
+    if (V.territory) {
+      for (const p of ps) {
+        if (p.won) continue;
+        if ((p.era || 0) >= 3 && (p.regionsOwned || 0) >= T.territoryRegions) {
+          p.won = true; p.winReason = 'territory';
+          events.push({ type: 'victory', playerId: p.id, reason: 'territory' });
+        }
       }
     }
-    // Economy: leading by >= 600 for >= 1800 ticks (90s) AND controlling >= 10
-    // regions AND reached the ecosystem era (era≥3). All victory lines converge
+    // Economy: leading by >= T.economyLead for >= T.economyHoldTicks ticks AND controlling
+    // >= 10 regions AND reached the ecosystem era (era≥3). All victory lines converge
     // on the final era so a 30+ min match cannot be ended by an early snowball.
-    if (ps.length > 1) {
-      ps.sort((a, b) => b.score - a.score);
-      const lead = ps[0].score - ps[1].score;
-      if (lead >= 600 && (ps[0].regionsOwned || 0) >= 10 && (ps[0].era || 0) >= 3) ps[0].scoreLeadTicks = (ps[0].scoreLeadTicks || 0) + 1;
-      else ps[0].scoreLeadTicks = 0;
-      if (ps[0].scoreLeadTicks >= 1800 && !ps[0].won) {
-        ps[0].won = true; ps[0].winReason = 'economy';
-        events.push({ type: 'victory', playerId: ps[0].id, reason: 'economy' });
+    if (V.economy) {
+      if (ps.length > 1) {
+        ps.sort((a, b) => b.score - a.score);
+        const lead = ps[0].score - ps[1].score;
+        if (lead >= T.economyLead && (ps[0].regionsOwned || 0) >= 10 && (ps[0].era || 0) >= 3) ps[0].scoreLeadTicks = (ps[0].scoreLeadTicks || 0) + 1;
+        else ps[0].scoreLeadTicks = 0;
+        if (ps[0].scoreLeadTicks >= T.economyHoldTicks && !ps[0].won) {
+          ps[0].won = true; ps[0].winReason = 'economy';
+          events.push({ type: 'victory', playerId: ps[0].id, reason: 'economy' });
+        }
       }
+    } else {
+      // A5（PRD Q2/E3）：经济线关闭时清零累计计数器，避免"关掉攒条、打开即胜"。
+      for (const p of ps) if (p.scoreLeadTicks) p.scoreLeadTicks = 0;
     }
-    // Survival: if everyone else is eliminated (12 deaths → lost), the last
-    // faction standing wins. (Only fires when there WAS a rival — solo sandboxes
+    // Survival: if everyone else is eliminated (deaths → lost), the last faction
+    // standing wins. (Only fires when there WAS a rival — solo sandboxes
     // with no opponents don't auto-declare.)
-    if (ps.length === 1 && Object.keys(this.players).length > 1) {
-      const sole = ps[0];
-      if (!sole.won && !sole.lost) {
-        sole.won = true; sole.winReason = 'survival';
-        events.push({ type: 'victory', playerId: sole.id, reason: 'survival' });
+    if (V.survival) {
+      if (ps.length === 1 && Object.keys(this.players).length > 1) {
+        const sole = ps[0];
+        if (!sole.won && !sole.lost) {
+          sole.won = true; sole.winReason = 'survival';
+          events.push({ type: 'victory', playerId: sole.id, reason: 'survival' });
+        }
       }
     }
   }
@@ -1425,7 +1504,14 @@ export class World {
       tick: this.tick,
       mode: this.mode,
       // 房主可调玩法参数（rts 与 go 共用；顶层，与 mode 平级）。
-      settings: { stonesPerTurn: this.stonesPerTurn, lonelyDeathDelay: this.lonelyDeathDelay },
+      settings: {
+        stonesPerTurn: this.stonesPerTurn,
+        lonelyDeathDelay: this.lonelyDeathDelay,
+        // 胜利条件（房主可配置）：开关 + rts 门槛 + 该模式可用开关集。
+        victoryLines: this.victoryLines,
+        victoryThresholds: this.victoryThresholds,
+        availableLines: World.availableLines(this.mode),
+      },
       // 棋子伤害（稀疏）：只含 dmg>0 的格子 [x,y,dmg]，供客户端显示"挨打的棋子"。两种模式都要有。
       lifeHits: this._lifeHits(),
       tide: { phase: this.tide.phase, ticksToNext: tideRemaining, surgeCount: this.tide.surgeCount },

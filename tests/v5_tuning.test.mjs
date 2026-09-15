@@ -8,7 +8,7 @@ import { World } from '../server/engine.js';
 import { makeAIPlayer, stepAI } from '../server/ai.js';
 
 test('V5-1 Singularity threshold is 30, not 20', () => {
-  const w = new World('w1', 1, 42);
+  const w = new World('w1', 1, 42, { victoryLines: { territory: false, singularity: true, economy: false, survival: false } });
   const p = w.addPlayer(1, 'P');
   // Manually push stock to 29 → should NOT win
   p._stock = { wood: 29, stone: 29, ore: 29, crystal: 29, food: 29, shard: 29 };
@@ -38,7 +38,7 @@ test('V5-2 Territory victory needs empire era + 12 regions', () => {
 });
 
 test('V5-3 Economy victory needs ecosystem era + lead 600 × 1800 ticks + 10 regions', () => {
-  const w = new World('w1', 1, 42);
+  const w = new World('w1', 1, 42, { victoryLines: { territory: false, economy: true, singularity: false, survival: false } });
   const p1 = w.addPlayer(1, 'P1');
   const p2 = w.addPlayer(2, 'P2');
   // 直接调用胜利判定（不用 tickOnce：tick 会按棋盘真实归属重算 regionsOwned）
@@ -54,7 +54,7 @@ test('V5-3 Economy victory needs ecosystem era + lead 600 × 1800 ticks + 10 reg
 });
 
 test('V5-3b Lead of only 100 (below new 600 threshold) does NOT trigger', () => {
-  const w = new World('w1', 1, 42);
+  const w = new World('w1', 1, 42, { victoryLines: { territory: false, economy: true, singularity: false, survival: false } });
   const p1 = w.addPlayer(1, 'P1');
   const p2 = w.addPlayer(2, 'P2');
   p1.score = 150; p2.score = 50;   // lead = 100
@@ -67,7 +67,7 @@ test('V5-3b Lead of only 100 (below new 600 threshold) does NOT trigger', () => 
 });
 
 test('V5-3c Economy win needs land: lead 650 but 0 regions must NOT trigger', () => {
-  const w = new World('w1', 1, 42);
+  const w = new World('w1', 1, 42, { victoryLines: { territory: false, economy: true, singularity: false, survival: false } });
   const p1 = w.addPlayer(1, 'P1');
   const p2 = w.addPlayer(2, 'P2');
   p1.score = 700; p2.score = 50;   // lead = 650
@@ -80,7 +80,7 @@ test('V5-3c Economy win needs land: lead 650 but 0 regions must NOT trigger', ()
 });
 
 test('V5-3d Economy win needs ecosystem era: pre-ecosystem must NOT trigger', () => {
-  const w = new World('w1', 1, 42);
+  const w = new World('w1', 1, 42, { victoryLines: { territory: false, economy: true, singularity: false, survival: false } });
   const p1 = w.addPlayer(1, 'P1');
   const p2 = w.addPlayer(2, 'P2');
   p1.score = 700; p2.score = 50;   // lead = 650

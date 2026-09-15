@@ -12,6 +12,7 @@ import { kickUser, onlineUserIds } from './net.js';
 import {
   createRoom, getRoom, attachWorld, closeRoom, roomInfo, listPublicRooms,
   verifyRoomPass, roomHub, MAX_PLAYERS, normStonesPerTurn, normLonelyDeathDelay,
+  normVictoryLines, normVictoryThresholds, setRoomSettings,
 } from './rooms.js';
 import {
   getInactiveDays, setInactiveDays, previewInactive, runInactivePurge, lastPurgeAt,
@@ -114,6 +115,9 @@ export function createRouter() {
       // 玩法设置透传（重建路径也不能丢；roomOpts 已由 roomForRoom 归一化）
       stonesPerTurn: roomOpts && roomOpts.stonesPerTurn,
       lonelyDeathDelay: roomOpts && roomOpts.lonelyDeathDelay,
+      // 胜利条件透传（重建路径同样不能丢）
+      victoryLines: roomOpts && roomOpts.victoryLines,
+      victoryThresholds: roomOpts && roomOpts.victoryThresholds,
     });
     activeWorlds.set(row.id, w);
     worldModes.set(row.id, md);
@@ -132,6 +136,7 @@ export function createRouter() {
       mode: room.mode, maxPlayers: room.maxPlayers, ownerId: room.ownerId, members: room.members,
       // 重启重建也要带上房间设置，否则设置会丢失
       stonesPerTurn: room.stonesPerTurn, lonelyDeathDelay: room.lonelyDeathDelay,
+      victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds,
     });
   }
 
@@ -230,16 +235,21 @@ export function createRouter() {
     worldsRepo.create(id, req.user.id, name, sd);
     const stonesPerTurn = normStonesPerTurn(b.stonesPerTurn);
     const lonelyDeathDelay = normLonelyDeathDelay(b.lonelyDeathDelay);
+    // 胜利条件：按模式归一（go 强制只留 territory）
+    const victoryLines = normVictoryLines(b.victoryLines, md);
+    const victoryThresholds = normVictoryThresholds(b.victoryThresholds);
     const w = new WorldEngine(id, req.user.id, sd, {
       mode: md,
       maxPlayers: b.maxPlayers,
       hostId: req.user.id,
       stonesPerTurn,
       lonelyDeathDelay,
+      victoryLines,
+      victoryThresholds,
     });
     activeWorlds.set(id, w);
     worldModes.set(id, md);
-    return res.json({ code: 0, message: 'ok', data: { worldId: id, seed: sd, mode: md, maxPlayers: w.maxPlayers, stonesPerTurn, lonelyDeathDelay } });
+    return res.json({ code: 0, message: 'ok', data: { worldId: id, seed: sd, mode: md, maxPlayers: w.maxPlayers, stonesPerTurn, lonelyDeathDelay, victoryLines, victoryThresholds } });
   });
 
   router.get('/worlds/:id', authed, (req, res) => {
@@ -258,6 +268,8 @@ export function createRouter() {
           members: room.members,
           stonesPerTurn: room.stonesPerTurn,
           lonelyDeathDelay: room.lonelyDeathDelay,
+          victoryLines: room.victoryLines,
+          victoryThresholds: room.victoryThresholds,
         };
       }
     } catch (e) { roomOpts = null; }
@@ -314,6 +326,7 @@ export function createRouter() {
         ownerId: req.user.id, name: b.name, maxPlayers: b.maxPlayers || w.maxPlayers,
         visibility: b.visibility, password: b.password, mode: w.mode,
         stonesPerTurn: b.stonesPerTurn, lonelyDeathDelay: b.lonelyDeathDelay,
+        victoryLines: b.victoryLines, victoryThresholds: b.victoryThresholds,
       });
       attachWorld(room, w.worldId, w.mode);
       // 房间设定的席位数同步到世界（电脑玩家同样占席位）
@@ -323,6 +336,7 @@ export function createRouter() {
         code: room.code, worldId: w.worldId, mode: w.mode,
         maxPlayers: room.maxPlayers,
         stonesPerTurn: room.stonesPerTurn, lonelyDeathDelay: room.lonelyDeathDelay,
+        victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds,
         room: roomInfo(room, req.user.id),
         invitePath: '/?room=' + room.code,
       } });
@@ -332,11 +346,13 @@ export function createRouter() {
       ownerId: req.user.id, name: b.name, maxPlayers: b.maxPlayers,
       visibility: b.visibility, password: b.password, mode: b.mode,
       stonesPerTurn: b.stonesPerTurn, lonelyDeathDelay: b.lonelyDeathDelay,
+      victoryLines: b.victoryLines, victoryThresholds: b.victoryThresholds,
     });
     room.members.set(req.user.id, { name: req.user.username });
     return res.json({ code: 0, message: 'ok', data: {
       code: room.code, maxPlayers: room.maxPlayers, mode: room.mode,
       stonesPerTurn: room.stonesPerTurn, lonelyDeathDelay: room.lonelyDeathDelay,
+      victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds,
       room: roomInfo(room, req.user.id), invitePath: '/?room=' + room.code,
     } });
   });
@@ -382,6 +398,8 @@ export function createRouter() {
       mode: md, maxPlayers: room.maxPlayers, hostId: req.user.id,
       // 房间玩法设置透传到世界
       stonesPerTurn: room.stonesPerTurn, lonelyDeathDelay: room.lonelyDeathDelay,
+      // 胜利条件透传到世界（房间记录为权威；go 下由引擎再强制 gate）
+      victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds,
     });
     activeWorlds.set(id, w);
     attachWorld(room, id, md);
@@ -440,6 +458,28 @@ export function createRouter() {
     const b = req.body || {};
     w.paused = (typeof b.paused === 'boolean') ? b.paused : !w.paused;
     return res.json({ code: 0, message: 'ok', data: { paused: w.paused, room: roomInfo(room, req.user.id) } });
+  });
+
+  // 房主中途修改胜利条件（仅房主；改后写回房间 + World + DB，下一次快照即生效）
+  router.patch('/rooms/:code/settings', authed, (req, res) => {
+    const room = getRoom(req.params.code);
+    if (!room || room.closed) return res.json({ code: 4001, message: 'room_not_found', data: null });
+    // 房主判定：世界已建则以世界 hostId 为准，否则用房间 ownerId（与 pause 路由同款范式）
+    const w = worldForRoom(room);
+    const hostId = w ? w.hostId : room.ownerId;
+    if (hostId !== req.user.id) return res.json({ code: 403, message: 'not_host', data: null });
+    const b = req.body || {};
+    const mode = w ? w.mode : room.mode;
+    const patch = {};
+    if (b.victoryLines !== undefined) patch.victoryLines = normVictoryLines(b.victoryLines, mode);
+    if (b.victoryThresholds !== undefined) patch.victoryThresholds = normVictoryThresholds(b.victoryThresholds);
+    const updated = setRoomSettings(room.code, patch);
+    return res.json({ code: 0, message: 'ok', data: {
+      victoryLines: updated.victoryLines,
+      victoryThresholds: updated.victoryThresholds,
+      availableLines: roomInfo(updated, req.user.id).availableLines,
+      room: roomInfo(updated, req.user.id),
+    } });
   });
 
   // 添加电脑玩家（手动；不占人类名额）

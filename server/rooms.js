@@ -53,6 +53,65 @@ export function normMaxPlayers(v) {
   return Math.max(1, Math.min(MAX_PLAYERS, Math.floor(n)));
 }
 
+// ---- 胜利条件归一：转发给引擎侧静态方法（避免重复实现，保证单一事实源）----
+/**
+ * 胜利线归一：非法输入回默认；go 模式下强制 economy/singularity/survival = false（防越权）。
+ * @param {object|string|null|undefined} v
+ * @param {('rts'|'go'|null)} mode
+ * @returns {{territory:boolean, economy:boolean, singularity:boolean, survival:boolean}}
+ */
+export function normVictoryLines(v, mode) {
+  if (WorldEngine && typeof WorldEngine.normVictoryLines === 'function') {
+    return WorldEngine.normVictoryLines(v, mode);
+  }
+  // 兜底（engine.js 未加载）：与引擎侧同逻辑的最小实现。
+  const dflt = { territory: true, economy: false, singularity: false, survival: false };
+  let o = v;
+  if (typeof o === 'string') { try { o = JSON.parse(o); } catch (e) { o = null; } }
+  const out = { ...dflt };
+  if (o && typeof o === 'object') {
+    for (const k of Object.keys(out)) if (typeof o[k] === 'boolean') out[k] = o[k];
+  }
+  if (mode === 'go') { out.economy = false; out.singularity = false; out.survival = false; }
+  return out;
+}
+
+/**
+ * rts 门槛归一：逐字段钳制到安全区间；非数字/空 → 默认（默认 = 原硬编码常量）。
+ * @param {object|string|null|undefined} v
+ * @returns {{territoryRegions:number, economyLead:number, economyHoldTicks:number,
+ *            singularityThreshold:number, deathLimit:number}}
+ */
+export function normVictoryThresholds(v) {
+  if (WorldEngine && typeof WorldEngine.normVictoryThresholds === 'function') {
+    return WorldEngine.normVictoryThresholds(v);
+  }
+  // 兜底（engine.js 未加载）：与引擎侧同规则的钳制。
+  const spec = {
+    territoryRegions: { dflt: 16, lo: 6, hi: 40 },
+    economyLead: { dflt: 600, lo: 200, hi: 2000 },
+    economyHoldTicks: { dflt: 1800, lo: 300, hi: 6000 },
+    singularityThreshold: { dflt: 30, lo: 6, hi: 200 },
+    deathLimit: { dflt: 12, lo: 3, hi: 50 },
+  };
+  let o = v;
+  if (typeof o === 'string') { try { o = JSON.parse(o); } catch (e) { o = null; } }
+  const out = {};
+  for (const [k, s] of Object.entries(spec)) {
+    const raw = (o && typeof o === 'object') ? o[k] : undefined;
+    const n = (typeof raw === 'number' && Number.isFinite(raw)) ? Math.floor(raw)
+      : (typeof raw === 'string' && Number.isFinite(Number(raw))) ? Math.floor(Number(raw)) : s.dflt;
+    out[k] = Math.max(s.lo, Math.min(s.hi, n));
+  }
+  return out;
+}
+
+/** 该模式可用的胜利线键集（转发引擎侧；go 仅 territory）。 */
+export function availableVictoryLines(mode) {
+  if (WorldEngine && typeof WorldEngine.availableLines === 'function') return WorldEngine.availableLines(mode);
+  return mode === 'go' ? ['territory'] : ['territory', 'economy', 'singularity', 'survival'];
+}
+
 export function makeRoomCode() {
   let code;
   let guard = 0;
@@ -73,6 +132,10 @@ export async function createRoom(o) {
   const passhash = (visibility === 'private' && o.password) ? await hashPassword(String(o.password)) : null;
   const stonesPerTurn = normStonesPerTurn(o.stonesPerTurn);
   const lonelyDeathDelay = normLonelyDeathDelay(o.lonelyDeathDelay);
+  const roomMode = o.mode === 'go' ? 'go' : (o.mode === 'rts' ? 'rts' : null);
+  // 胜利条件（房主设定；归一后写入 → DB 镜像 → 重建时透传）
+  const victoryLines = normVictoryLines(o.victoryLines, roomMode);
+  const victoryThresholds = normVictoryThresholds(o.victoryThresholds);
   const room = {
     code,
     ownerId: o.ownerId,
@@ -80,10 +143,12 @@ export async function createRoom(o) {
     maxPlayers: normMaxPlayers(o.maxPlayers),
     visibility,
     passhash,
-    mode: o.mode === 'go' ? 'go' : (o.mode === 'rts' ? 'rts' : null),
+    mode: roomMode,
     // 玩法设置（房主设定；重建世界时透传，保证重启不丢）
     stonesPerTurn,
     lonelyDeathDelay,
+    victoryLines,
+    victoryThresholds,
     worldId: '',
     // 大厅成员（世界尚未建立时也有人在房里等）——playerId -> { name }
     members: new Map(),
@@ -94,7 +159,7 @@ export async function createRoom(o) {
   try {
     roomsRepo.create(code, '', o.ownerId, room.maxPlayers, {
       visibility, passhash, name: room.name, mode: room.mode,
-      stonesPerTurn, lonelyDeathDelay,
+      stonesPerTurn, lonelyDeathDelay, victoryLines, victoryThresholds,
     });
   } catch (e) { /* DB 镜像失败不影响内存房间 */ }
   return room;
@@ -113,6 +178,8 @@ function hydrate(row) {
     // 旧库缺列/为 NULL → 回退默认
     stonesPerTurn: normStonesPerTurn(row.stones_per_turn),
     lonelyDeathDelay: normLonelyDeathDelay(row.lonely_death_delay),
+    victoryLines: normVictoryLines(row.victory_lines, row.mode || null),
+    victoryThresholds: normVictoryThresholds(row.victory_thresholds),
     worldId: row.world_id || '',
     members: new Map(),
     createdAt: row.created_at,
@@ -175,10 +242,16 @@ export function roomInfo(room, viewerId) {
     : (Number.isInteger(room.stonesPerTurn) ? room.stonesPerTurn : stonesPerTurnDefault());
   const lonelyDeathDelay = Number.isInteger(ws.lonelyDeathDelay) ? ws.lonelyDeathDelay
     : (Number.isInteger(room.lonelyDeathDelay) ? room.lonelyDeathDelay : lonelyDeathDelayDefault());
+  // 胜利条件：世界为权威（建好后），否则房间记录，都没有则回退默认。
+  const modeNow = w ? w.mode : (room.mode || null);
+  const victoryLines = (ws.victoryLines) ? ws.victoryLines
+    : (room.victoryLines || normVictoryLines(null, modeNow));
+  const victoryThresholds = (ws.victoryThresholds) ? ws.victoryThresholds
+    : (room.victoryThresholds || normVictoryThresholds(null));
   return {
     code: room.code,
     name: room.name,
-    mode: w ? w.mode : (room.mode || null),
+    mode: modeNow,
     visibility: room.visibility,
     hasPassword: room.visibility === 'private' && !!room.passhash,
     ownerId: room.ownerId,
@@ -188,6 +261,10 @@ export function roomInfo(room, viewerId) {
     // 玩法设置（供大厅与房内展示）
     stonesPerTurn,
     lonelyDeathDelay,
+    // 胜利条件（房主可配置）+ 本模式可用开关集
+    victoryLines,
+    victoryThresholds,
+    availableLines: availableVictoryLines(modeNow),
     humanCount: humans,
     aiCount: ais,
     seatCount: humans + ais,
@@ -232,6 +309,31 @@ export function listPublicRooms() {
   }
   out.sort((a, b) => (a.phase === 'lobby' ? -1 : 1) - (b.phase === 'lobby' ? -1 : 1));
   return out;
+}
+
+// ============== 房主中途改配置 ==============
+
+/**
+ * 房主中途修改房间的胜利条件（内存权威覆盖 + DB 镜像）。
+ * 归一在调用方（routes）已完成；这里只负责写入 room 与（若世界已建）World。
+ * @param {string} code 房间号
+ * @param {{victoryLines?:object, victoryThresholds?:object}} patch 已归一化的设置
+ * @returns {object|null} 更新后的房间（不存在则 null）
+ */
+export function setRoomSettings(code, patch) {
+  const room = getRoom(code);
+  if (!room) return null;
+  if (patch && patch.victoryLines) room.victoryLines = normVictoryLines(patch.victoryLines, room.mode);
+  if (patch && patch.victoryThresholds) room.victoryThresholds = normVictoryThresholds(patch.victoryThresholds);
+  // 世界已建成 → 内存权威同步覆盖（下一次快照即生效）
+  const w = roomWorld(room);
+  if (w) {
+    if (patch && patch.victoryLines) w.victoryLines = normVictoryLines(patch.victoryLines, w.mode);
+    if (patch && patch.victoryThresholds) w.victoryThresholds = normVictoryThresholds(patch.victoryThresholds);
+  }
+  try { roomsRepo.setSettings(room.code, { victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds }); }
+  catch (e) { /* DB 镜像失败不影响内存房间 */ }
+  return room;
 }
 
 // ============== 自动清理空房间 ==============

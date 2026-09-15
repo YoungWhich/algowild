@@ -236,24 +236,26 @@ test('GM-12 终局-手数上限：moveNo=150 → reason === "max_moves"', () => 
   assert.equal(w.go.result.reason, 'max_moves');
 });
 
-test('GM-13 终局-吃光：一方 lifeCells=0 且 maxLifeCells>=4 → reason=wiped，该方 lost', () => {
+test('GM-13 终局-吃光不再判胜：一方 lifeCells=0 → reason=wiped 触发终局，但胜者由数子决定', () => {
   const { w } = seated();
   const ev = [];
   const pB = w.players[w.go.blackId];
-  // 模拟黑曾经达到规模后被清零
+  // 模拟黑曾经达到规模后被清零（盘面清空确保白也无子 → 数子双方都 0 → 平局）
+  for (let x = 0; x < 32; x++) for (let y = 0; y < 32; y++) w._life[x][y] = 0;
   pB.maxLifeCells = 6;
   pB.lifeCells = 0;
-  // 触发一次 endTurn（白 pass）
-  w.applyGoIntent(w.go.whiteId === 1 ? w.go.blackId : 2, { pass: true }, ev);
-  // 用当前行动方 pass 触发结算
-  if (!w.go.result) {
-    const cur = w._lifeOwners[w.go.turn - 1];
-    w.applyGoIntent(cur, { pass: true }, ev);
-  }
-  assert.ok(w.go.result, '应已终局');
+  // 触发一次 endTurn（当前行动方 pass）
+  const cur = w.go.seats[w.go.turnIdx];
+  w.applyGoIntent(cur, { pass: true }, ev);
+  assert.ok(w.go.result, '应已终局（wiped 仍作为终局触发器）');
   assert.equal(w.go.result.reason, 'wiped');
   assert.equal(pB.lost, true, '被吃光方应 lost');
-  assert.equal(w.go.result.winner != null && String(w.go.result.winner) === String(w.go.whiteId), true, '对方应获胜');
+  // 关键行为变更（VC-09/VC-10）：清盘**不再**让对手无条件胜；胜负由数子决定。
+  // 本局面盘面全空 → 双方数子 0:0 → 平局（winner=null），绝不再是"清盘者对手胜"。
+  assert.equal(w.go.result.winner, null, '清盘不产生"清盘者对手无条件胜"，双方同分应为平局');
+  // 数子明细应为 0 子 0 空点
+  assert.equal(w.go.result.blackScore, 0);
+  assert.equal(w.go.result.whiteScore, 0);
 });
 
 test('GM-14 超时=pass：turnTicks 推到 30 → go_timeout 事件 + 手数推进', () => {

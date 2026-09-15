@@ -670,6 +670,85 @@ export function installGoMode(World) {
     return { byF, black: b, white: w, bonus, ranked };
   };
 
+  // ---------- 中国规则数子（子数 + 围住的空点数）· 终局胜负依据 ----------
+
+  /**
+   * 4-邻浮空围空：把盘面所有"连通空区"用洪水填充找出，按 4-邻接触到的阵营去重。
+   * 恰好 1 个阵营接触 → 该空区全归它（= 被围住的空点）；接触 0 或 ≥2 个阵营 → 中立。
+   * 棋盘边界**不算**归属方（越界不计），避免把"棋盘外"误判为围住。
+   * 纯函数、无随机、O(W²)：只在终局调用一次，非 tick 内。
+   * @returns {{byF:Object<number,number>}} faction -> 被该阵营围住的空点数
+   */
+  P._goEnclosedEmpty = function _goEnclosedEmpty() {
+    const W = World.LIFE_W, L = this._life;
+    const seen = new Uint8Array(W * W);          // 访问标记（0/1）
+    const byF = Object.create(null);
+    for (let x = 0; x < W; x++) {
+      for (let y = 0; y < W; y++) {
+        const key = x * W + y;
+        if (L[x][y] !== 0 || seen[key]) continue;  // 只从未访问的空点起 BFS
+        // --- 洪水填充一个连通空区 ---
+        const stack = [[x, y]]; seen[key] = 1;
+        let cellCount = 0;                         // 本空区空格数
+        const borderF = new Set();                 // 接触到的非空阵营（越界不计）
+        while (stack.length) {
+          const [cx, cy] = stack.pop(); cellCount++;
+          for (const [dx, dy] of NEI4) {
+            const nx = cx + dx, ny = cy + dy;
+            if (nx < 0 || ny < 0 || nx >= W || ny >= W) continue;   // 棋盘边 = 无归属
+            const v = L[nx][ny];
+            if (v === 0) { const k = nx * W + ny; if (!seen[k]) { seen[k] = 1; stack.push([nx, ny]); } }
+            else borderF.add(v);                   // 记录接触到的阵营
+          }
+        }
+        // --- 归属判定：恰好单一阵营围住 → 全部计给它；否则中立 ---
+        if (borderF.size === 1) {
+          const f = borderF.values().next().value;
+          byF[f] = (byF[f] || 0) + cellCount;
+        }
+      }
+    }
+    return { byF };
+  };
+
+  /**
+   * 中国规则数子：己方棋子数 + 己方围住的空点数（多者胜，不贴子）。纯函数、无随机、O(W²)。
+   * 与 _goScore()（Voronoi 归属目数，保留给 rts-go 快照 / 旧口径）语义不同 —— 本函数才是
+   * go 终局胜负依据。
+   * @returns {{byF:Object<number,number>, black:number, white:number,
+   *            stoneByF:Object<number,number>, emptyByF:Object<number,number>, ranked:object[]}}
+   */
+  P._goScoreChinese = function _goScoreChinese() {
+    const g = this._goInit();
+    const W = World.LIFE_W, L = this._life;
+    const stoneByF = Object.create(null);
+    for (let x = 0; x < W; x++) {
+      for (let y = 0; y < W; y++) {
+        const v = L[x][y];
+        if (v > 0) stoneByF[v] = (stoneByF[v] || 0) + 1;   // 子数（go 盘只有 1..8）
+      }
+    }
+    const { byF: emptyByF } = this._goEnclosedEmpty();     // 空点归属
+    const byF = Object.create(null);
+    const keys = new Set([...Object.keys(stoneByF), ...Object.keys(emptyByF)]);
+    for (const k of keys) byF[k] = (stoneByF[k] || 0) + (emptyByF[k] || 0);
+    const black = byF[g.blackF] || 0, white = byF[g.whiteF] || 0;
+    const ranked = (g.seats || []).map((pid, i) => {
+      const f = g.seatF[i];
+      const p = this.players[pid];
+      return {
+        playerId: pid, faction: f, name: p ? p.name : String(pid),
+        isAI: !!(p && p.isAI), botControlled: !!(p && p.botControlled), lost: !!(p && p.lost),
+        lostReason: (p && p.lostReason) || null,             // 'wiped' | 'resign' | ...（供胜负池判定）
+        score: byF[f] || 0,                                  // 数子总分
+        stones: stoneByF[f] || 0,                            // 明细：子数
+        empty: emptyByF[f] || 0,                             // 明细：围住空点
+        territory: byF[f] || 0,                              // 兼容别名字段（旧前端/旧代码）
+      };
+    }).sort((a, b) => b.score - a.score);
+    return { byF, black, white, stoneByF, emptyByF, ranked };
+  };
+
   // ---------- 回合状态机 / 终局 ----------
 
   /**
@@ -688,7 +767,11 @@ export function installGoMode(World) {
     if (g.passStreak >= seats.length) endReason = 'pass';
     else if (g.moveNo >= World.GO_MAX_MOVES) endReason = 'max_moves';
 
-    // 吃光出局（"一条命"）：曾建立规模（≥ WIPE_ELIM_MIN_CELLS）后被清零 → 立即出局
+    // 吃光出局（"一条命"）：曾建立规模（≥ WIPE_ELIM_MIN_CELLS）后被清零 → 登记出局。
+    // ⚠️ 用户拍板（VC-09/VC-10）：吃光**不算赢**（围棋真规则）。此处的 `wiped` 仅作为
+    //    **终局触发器**（等价于"该方已无子可数、棋局实质结束"），**不产生胜者**；
+    //    胜负一律由 _goFinish → _goScoreChinese 数子决定。
+    //    （若产品希望"清盘后继续下到双方 Pass"，删下一行 `if (!endReason) endReason = 'wiped';` 即可。）
     for (const pid of seats) {
       const p = this.players[pid];
       if (!p || p.lost) continue;
@@ -703,7 +786,7 @@ export function installGoMode(World) {
       const p = this.players[pid];
       if (p && (p.goTimeouts || 0) >= World.GO_MAX_TIMEOUTS && !endReason) endReason = 'timeout';
     }
-    // 只剩一方未出局 → 直接终局
+    // 只剩一方未出局 → 触发终局（胜负仍由 _goFinish 数子排名决定，非"最后一人无条件胜"）
     const aliveSeats = seats.filter(pid => !(this.players[pid] && this.players[pid].lost));
     if (!endReason && aliveSeats.length <= 1 && seats.length > 1) endReason = 'last_standing';
     if (endReason) { this._goFinish(endReason, events); return; }
@@ -723,37 +806,49 @@ export function installGoMode(World) {
   };
 
   /**
-   * 终局结算：按领地目数排名，最高者胜（并列则平局）；写入 world.go.result。
+   * 终局结算：按**中国规则数子**（子数 + 围住空点）排名，唯一最高者胜（并列则平局，不贴子）。
+   * 胜利线【领土】关闭时（含全关）→ 不宣告任何胜者（winner=null），只出明细。
    * @param {string} reason 终局原因（pass / max_moves / wiped / timeout / resign / last_standing）
    * @param {object[]} events
    */
   P._goFinish = function _goFinish(reason, events) {
     const g = this._goInit();
-    const sc = this._goScore();
-    // 在座且未出局者参与排名
-    const alive = sc.ranked.filter(r => !r.lost);
-    const pool = alive.length ? alive : sc.ranked;
+    const sc = this._goScoreChinese();          // ← 中国规则数子（取代 Voronoi 目数 _goScore）
+    // 参与胜负比较的池：剔除「弃权类出局」（认输/超时判负——这些方已主动放弃，绝不应判胜），
+    // 但**保留「被吃光 wiped」方**（用户拍板 VC-09：吃光不算赢，只触发终局）。
+    // 被吃光方盘面 0 子 ⇒ 数子恒为 0，保留它只会让「双方同为 0」正确地判为平局（并列），
+    // 永远不会让它反超别人（0 分无法高于任何正分），从而杜绝旧的“吃光者对手无条件胜”。
+    const pool = sc.ranked.filter(r => !r.lost || r.lostReason === 'wiped');
+    const eff = pool.length ? pool : sc.ranked;   // 全员弃权等极端情况退化为全席位排名
     let winner = null;
-    if (pool.length) {
-      const top = pool[0];
-      const tie = pool.filter(r => r.territory === top.territory && r.faction !== top.faction);
-      // 唯一最高分才算胜（并列 → 平局）
-      winner = tie.length ? null : top.playerId;
+    // 胜利线【领土】开着才宣告胜者；关掉 → winner=null（E6/VC-02）。
+    // go 模式下 victoryLines 恒只含 territory（引擎/归一已 gate），此处只需读 territory。
+    const territoryOn = !this.victoryLines || this.victoryLines.territory !== false;
+    if (territoryOn && eff.length) {
+      const top = eff[0];
+      const tie = eff.filter(r => r.score === top.score && r.faction !== top.faction);
+      winner = tie.length ? null : top.playerId;  // 唯一最高才算胜；并列 → 平局（不贴子）
     }
     g.result = {
       winner,
       reason,
-      ranked: pool.map(r => ({ playerId: r.playerId, name: r.name, faction: r.faction, territory: r.territory })),
-      // 兼容旧字段（两方局）
-      blackTerritory: sc.black,
-      whiteTerritory: sc.white,
+      ranked: eff.map(r => ({
+        playerId: r.playerId, name: r.name, faction: r.faction,
+        score: r.score, stones: r.stones, empty: r.empty,
+        lost: r.lost, lostReason: r.lostReason,
+        territory: r.territory,   // 兼容旧字段名（值口径已由 Voronoi 目数变为数子总分）
+      })),
+      // 兼容旧字段名（值口径已变更）；新增中国规则口径字段
+      blackScore: sc.black, whiteScore: sc.white,
+      blackTerritory: sc.black, whiteTerritory: sc.white,
       moves: Math.max(0, g.moveNo - 1),
     };
     events.push({ type: 'go_end', winner, reason, ranked: g.result.ranked,
+      blackScore: sc.black, whiteScore: sc.white,
       blackTerritory: sc.black, whiteTerritory: sc.white, moves: g.result.moves });
     if (winner != null) {
       const p = this.players[winner];
-      if (p) { p.won = true; p.winReason = 'go'; }
+      if (p) { p.won = true; p.winReason = 'go'; }   // Q3 裁决：沿用 'go'（无榜单依赖）
     }
   };
 
@@ -872,6 +967,9 @@ export function installGoMode(World) {
   P._goSnapshotState = function _goSnapshotState() {
     const g = this._goSyncSeats();
     const sc = g.result ? null : this._goScore();
+    // 中国规则数子明细（子数 + 围住空点）。局中与终局都输出，供 UI 展示"吃光不算赢"。
+    const chinese = this._goScoreChinese();
+    const scs = g.result ? null : chinese;   // 局中 = 当前盘面数子；终局 = 用 result 里的快照
     const turnPid = (g.seats && g.seats[g.turnIdx] != null) ? g.seats[g.turnIdx] : null;
     const winnerName = g.result && g.result.winner != null
       ? ((this.players[g.result.winner] || {}).name || null) : null;
@@ -913,7 +1011,18 @@ export function installGoMode(World) {
       nextBreathIn: (World.GO_BREATH_EVERY - ((g.moveNo - 1) % World.GO_BREATH_EVERY)) % World.GO_BREATH_EVERY,
       event: g.lastEvent || 'calm',
       ko: g.ko,
+      // 旧口径（Voronoi 归属目数 + 图案奖）：保留不动，rts-go 快照与旧代码仍可读
       territory: sc ? { byF: sc.byF, black: sc.black, white: sc.white, ranked: sc.ranked } : null,
+      // 新口径：中国规则数子（子数 + 围住空点）——终局胜负依据，供结算面板展示
+      chineseScore: g.result ? {
+        black: g.result.blackScore, white: g.result.whiteScore,
+        ranked: g.result.ranked,
+      } : {
+        black: scs.black, white: scs.white,
+        stoneByF: scs.stoneByF, emptyByF: scs.emptyByF,
+        ranked: scs.ranked.map(r => ({ playerId: r.playerId, name: r.name, faction: r.faction,
+          score: r.score, stones: r.stones, empty: r.empty })),
+      },
       bonusSeen: (g.scoredPatterns || []).length,
       lastMove: g.moveLog.length ? g.moveLog[g.moveLog.length - 1] : null,
       result: g.result ? { ...g.result, winnerName } : null,

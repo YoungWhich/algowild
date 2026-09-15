@@ -163,15 +163,18 @@ $('auth-go').onclick = async () => {
 
 function roomOpts() {
   const mp = parseInt(($('room-max') && $('room-max').value) || '4', 10);
+  const mode = ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts';
   return {
     name: ($('room-name') && $('room-name').value.trim()) || undefined,
     maxPlayers: Number.isFinite(mp) ? Math.max(1, Math.min(8, mp)) : 4,
     visibility: ($('room-vis') && $('room-vis').value) === 'private' ? 'private' : 'public',
     password: ($('room-pass') && $('room-pass').value) || undefined,
-    mode: ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts',
+    mode,
     // 玩法设置（服务端会再钳制）：每回合落子数 1..16（默认 3）、死亡宽限回合 0..10（默认 0）
     stonesPerTurn: clampInt($('room-stones') && $('room-stones').value, 1, 16, 3),
     lonelyDeathDelay: clampInt($('room-delay') && $('room-delay').value, 0, 10, 0),
+    // 胜利条件（房主勾选；服务端按模式再 gate）
+    victoryLines: collectVictoryLines('victory-lines-build-list', mode),
   };
 }
 // 整数钳制：非数字/空 → 默认；越界 → 钳到边界。
@@ -181,10 +184,92 @@ function clampInt(v, min, max, dflt) {
   if (!Number.isFinite(n)) return dflt;
   return Math.max(min, Math.min(max, n));
 }
+
+// ============== 胜利条件组件（建房弹窗 + 房内面板共用同一渲染/收集逻辑） ==============
+// 各模式可用的胜利线（与后端 World.VICTORY_AVAILABLE 契约一致）。
+const VICTORY_LINE_KEYS = ['territory', 'economy', 'singularity', 'survival'];
+const VICTORY_AVAILABLE = {
+  rts: ['territory', 'economy', 'singularity', 'survival'],
+  go: ['territory'],
+};
+const VICTORY_LINE_DEFAULT = { territory: true, economy: false, singularity: false, survival: false };
+const VICTORY_LABEL = {
+  territory: { rts: '领土', go: '领土', descRts: '占满地图 16 区且进入帝国时代 → 胜', descGo: '双方停手后数子（子数+围住空点），多者胜' },
+  economy: { rts: '经济', descRts: '领先 600 分并保持 90 秒 → 胜', descGo: '' },
+  singularity: { rts: '采集', descRts: '六种资源各存满 30 → 胜', descGo: '' },
+  survival: { rts: '灭族', descRts: '对手全部出局 → 胜', descGo: '' },
+};
+function availableVictoryLines(mode) { return VICTORY_AVAILABLE[mode] || VICTORY_AVAILABLE.rts; }
+// 读取某模式下"胜利条件"勾选区当前状态（容器 id + 模式）。
+function collectVictoryLines(containerId, mode) {
+  const box = $(containerId);
+  const out = { ...VICTORY_LINE_DEFAULT };
+  if (!box) return normVictoryLinesClient(out, mode);
+  for (const k of VICTORY_LINE_KEYS) {
+    const el = box.querySelector('input[data-line="' + k + '"]');
+    if (el) out[k] = !!el.checked;
+  }
+  return normVictoryLinesClient(out, mode);
+}
+// 客户端归一（与后端 normVictoryLines 同契约）：go 下强制只留 territory。
+function normVictoryLinesClient(v, mode) {
+  const out = { ...VICTORY_LINE_DEFAULT };
+  if (v && typeof v === 'object') {
+    for (const k of VICTORY_LINE_KEYS) if (typeof v[k] === 'boolean') out[k] = v[k];
+  }
+  const allow = availableVictoryLines(mode);
+  for (const k of VICTORY_LINE_KEYS) if (!allow.includes(k)) out[k] = false;
+  return out;
+}
+/**
+ * 渲染"胜利条件"开关片段（建房弹窗 + 房内编辑弹窗共用）。
+ * @param {string} containerId 容器元素 id
+ * @param {('rts'|'go')} mode
+ * @param {object} value 当前勾选值
+ * @param {boolean} editable 是否可编辑（房内非房主 = 只读展示）
+ */
+function renderVictoryLines(containerId, mode, value, editable) {
+  const box = $(containerId);
+  if (!box) return;
+  const v = normVictoryLinesClient(value, mode);
+  const allow = availableVictoryLines(mode);
+  box.innerHTML = allow.map(k => {
+    const lab = VICTORY_LABEL[k] || { rts: k };
+    const desc = mode === 'go' ? (lab.descGo || lab.descRts || '') : (lab.descRts || '');
+    const cb = `<input type="checkbox" data-line="${k}" ${v[k] ? 'checked' : ''} ${editable ? '' : 'disabled'}>`;
+    return `<label style="display:flex;gap:6px;align-items:center;padding:2px 0;cursor:${editable ? 'pointer' : 'default'}">`
+      + cb + `<span>${escapeHtml(lab.rts)}</span>`
+      + `<span style="color:#6e7681;font-size:11px">${escapeHtml(desc)}</span></label>`;
+  }).join('');
+  // 关闭的线（如切到 go 后 economy）→ 给一行灰字提示
+  const dropped = VICTORY_LINE_KEYS.filter(k => allow.indexOf(k) === -1);
+  if (dropped.length && mode === 'go') {
+    box.innerHTML += `<div style="color:#6e7681;font-size:11px;margin-top:4px">回合制不支持「${dropped.map(k => VICTORY_LABEL[k].rts).join('、')}」，已取消勾选</div>`;
+  }
+}
+// 胜利条件文本（HUD / 房间展示）：把 victoryLines 转成人类可读串。
+function victoryLinesText(lines, mode) {
+  const v = normVictoryLinesClient(lines || VICTORY_LINE_DEFAULT, mode);
+  const names = availableVictoryLines(mode).filter(k => v[k]).map(k => VICTORY_LABEL[k].rts);
+  if (!names.length) return '无（本局仅计时/手动结束）';
+  return names.join(' · ');
+}
+// 模式切换时：重渲建房弹窗的胜利条件区（静默丢弃新模式不支持的项）
+function onModeChange() {
+  const mode = ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts';
+  const cur = collectVictoryLines('victory-lines-build-list', mode === 'go' ? 'rts' : 'go'); // 保留旧模式下的选择
+  renderVictoryLines('victory-lines-build-list', mode, cur, true);
+}
 if ($('room-vis')) $('room-vis').onchange = () => {
   const priv = $('room-vis').value === 'private';
   if ($('room-pass-row')) $('room-pass-row').style.display = priv ? 'flex' : 'none';
 };
+// 模式切换 → 重渲建房弹窗的胜利条件区（静默丢弃新模式不支持的项 + 灰字提示）
+if ($('world-mode')) $('world-mode').onchange = () => onModeChange();
+// 首次渲染建房弹窗的胜利条件区（默认仅勾「领土」）
+if ($('victory-lines-build-list')) {
+  renderVictoryLines('victory-lines-build-list', ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts', VICTORY_LINE_DEFAULT, true);
+}
 
 async function createRoomFlow() {
   const o = roomOpts();
@@ -243,6 +328,7 @@ if ($('quick-room')) $('quick-room').onclick = async () => {
       name: '快速开局', maxPlayers: 4, visibility: 'public', mode,
       stonesPerTurn: clampInt($('room-stones') && $('room-stones').value, 1, 16, 3),
       lonelyDeathDelay: clampInt($('room-delay') && $('room-delay').value, 0, 10, 0),
+      victoryLines: collectVictoryLines('victory-lines-build-list', mode),
     });
     state.roomCode = r.code;
     state.mode = mode;
@@ -295,6 +381,47 @@ if ($('lobby-save')) $('lobby-save').onclick = async () => {
   try { await api('POST', `/api/rooms/${state.roomCode}/save`); toast('✅ 已存档（任何玩家都可存档）'); }
   catch (e) { toast('存档失败：' + e.message); }
 };
+// 房主编辑胜利条件（弹小 modal → PATCH /rooms/:code/settings）
+if ($('victory-edit')) $('victory-edit').onclick = async () => {
+  if (!state.roomCode) { toast('先建房/进房'); return; }
+  const info = state._roomInfo || await api('GET', `/api/rooms/${state.roomCode}`);
+  const mode = info.mode === 'go' ? 'go' : 'rts';
+  $('modal-title').textContent = '编辑胜利条件（房主）';
+  $('modal-body').innerHTML = `
+    <div style="font-size:13px;line-height:1.6">
+      <div style="color:#8b949e;font-size:12px;margin-bottom:6px">勾选本局启用的胜利条件（未勾选则不触发）</div>
+      <div id="victory-lines-edit-list"></div>
+      <div style="color:#6e7681;font-size:11px;margin-top:8px">
+        开启一条当前已满足的线，将在下一拍即判定；本局无胜利条件（全不勾）时需手动结束。
+      </div>
+    </div>`;
+  renderVictoryLines('victory-lines-edit-list', mode, info.victoryLines, true);
+  const ok = $('modal-ok');
+  ok.textContent = '保存';
+  $('modal').style.display = 'flex';
+  const cleanup = () => {
+    ok.removeEventListener('click', onOk);
+    $('modal').removeEventListener('click', onBackdrop);
+    document.removeEventListener('keydown', onKey);
+    ok.textContent = '确定';
+  };
+  const doClose = () => { $('modal').style.display = 'none'; cleanup(); };
+  const onBackdrop = (e) => { if (e.target === $('modal')) doClose(); };
+  const onKey = (e) => { if (e.key === 'Escape') doClose(); };
+  const onOk = async () => {
+    const lines = collectVictoryLines('victory-lines-edit-list', mode);
+    try {
+      const d = await api('PATCH', `/api/rooms/${state.roomCode}/settings`, { victoryLines: lines });
+      state._roomInfo = d.room;
+      renderLobby(d.room);
+      toast('✅ 已更新胜利条件');
+      doClose();
+    } catch (e) { toast('更新失败：' + e.message); }
+  };
+  ok.addEventListener('click', onOk);
+  $('modal').addEventListener('click', onBackdrop);
+  document.addEventListener('keydown', onKey);
+};
 if ($('lobby-leave')) $('lobby-leave').onclick = () => {
   state.roomCode = null; state.worldId = null;
   if (state.ws) try { state.ws.close(); } catch {}
@@ -331,6 +458,15 @@ function renderLobby(info) {
     const spt = Number.isInteger(info.stonesPerTurn) ? info.stonesPerTurn : 3;
     const ldd = Number.isInteger(info.lonelyDeathDelay) ? info.lonelyDeathDelay : 0;
     $('room-settings-info').textContent = `落子 ${spt} 颗/回合 · 死亡宽限 ${ldd} 回合`;
+  }
+  // 胜利条件展示（只读；房主可点[编辑]改）
+  const vMode = info.mode === 'go' ? 'go' : 'rts';
+  if ($('victory-info')) {
+    $('victory-info').textContent = victoryLinesText(info.victoryLines, vMode)
+      + (info.isOwner || (state.user && info.hostId === state.user.id) ? '' : '（房主设定）');
+  }
+  if ($('victory-edit-row')) {
+    $('victory-edit-row').style.display = (isHost) ? 'flex' : 'none';
   }
   // 房主按钮
   if ($('lobby-build-row')) $('lobby-build-row').style.display = (isHost && phase === 'lobby') ? 'flex' : 'none';
@@ -395,7 +531,7 @@ async function showGoRules() {
   await modal('规则速查 · 回合制 演化棋', `
     <div style="font-size:13px;line-height:1.7">
       <b style="color:#ffd479">目标</b>：32×32 棋盘上，每回合可在任意空格落<b>多颗</b>子（默认 3，房主可设 1~16），按围棋规则提子，
-      随后全盘跑一步<b>康威演化</b>——你的细胞会自己往外长。手数上限 150，比谁先占更多地（目数）。
+      随后全盘跑一步<b>康威演化</b>——你的细胞会自己往外长。手数上限 150，终局按<b>中国规则数子</b>（子数 + 围住的空点）多者胜。
       <div style="margin-top:8px"><b style="color:#ffd479">规则</b></div>
       ① <b>落子</b>：点任意空格即可（不限于邻接）；<b>每回合可落多颗</b>（默认 3，房主可设 1~16）。也可<b>不落子 / 少落子</b>——摆完点 <b>【结束回合】</b>即可生效；<b>0 颗直接点【结束回合】= 停一手（Pass）</b>，少于上限也能随时结束回合。<br>
       ② <b>提子</b>：正交 4 邻无气（无空点）的敌团被整团提掉；<b>禁自杀</b>；<b>劫</b>需先在他处应一手。<br>
@@ -404,7 +540,7 @@ async function showGoRules() {
       ④ <b>领地</b>：每格归属最近的棋子（Voronoi），影响半径 R 每 10 手"呼吸"变化（3/4/5），
       领地边界会涨潮退潮。<br>
       ⑤ <b>世界事件</b>：每 25 手抽一个（繁盛 / 寒潮 / 拥挤突变），只改本回合演化参数。<br>
-      ⑥ <b>终局</b>：全体连续停手（Pass，即每方都点【结束回合】且不落子）/ 150 手 / 一方被吃光 / 认输 / 累计 3 次超时。<br>
+      ⑥ <b>终局</b>：<b>双方连续停手</b>（Pass，即每方都点【结束回合】且不落子）后，按<b>中国规则数子</b>结算（自己的<b>子数 + 围住的空点数</b>，多者胜，不贴子）；此外 150 手 / 一方被吃光 / 认输 / 累计 3 次超时也会进入终局，胜者仍由数子决定。<b>吃光对方不算赢</b>。<br>
       ⑦ <b>预览</b>：按 <kbd>Q</kbd> 开演化预览——会把本回合预选子也算进去（绿=将新生 / 红×=将死）。<br>
       <div style="margin-top:8px;color:#8b949e;font-size:12px">
       每手 30 秒倒计时，超时自动停一手。同 seed + 手顺可完整复盘（逐手一致）。
@@ -2404,19 +2540,28 @@ function renderGoHud() {
     submitGoPending();
   }
   const sc = g.territory || { black: 0, white: 0 };
-  // 多方（2..8）：直接用 go.seats 的每席目数；兼容旧两方快照
+  // 中国规则数子（子数 + 围住空点）总分为主显示口径；Voronoi 目数仅作旧口径兼容。
+  const cs = g.chineseScore || null;
+  const csByPid = {};
+  if (cs && Array.isArray(cs.ranked)) for (const r of cs.ranked) csByPid[String(r.playerId)] = r.score;
+  // 多方（2..8）：直接用 go.seats 的每席数子分；兼容旧两方快照
   const seats = Array.isArray(g.seats) ? g.seats.slice() : [];
-  if (seats.length) seats.sort((a, b) => (b.territory || 0) - (a.territory || 0));
+  if (seats.length) seats.sort((a, b) => {
+    const av = (csByPid[String(a.playerId)] != null ? csByPid[String(a.playerId)] : (a.territory || 0));
+    const bv = (csByPid[String(b.playerId)] != null ? csByPid[String(b.playerId)] : (b.territory || 0));
+    return bv - av;
+  });
   const scoreHtml = seats.length
     ? seats.map(s => {
         const me = s.playerId != null && sameId(s.playerId, uid);
         const dot = s.lost ? '✕' : (s.isTurn ? '▶' : '●');
+        const val = (csByPid[String(s.playerId)] != null) ? csByPid[String(s.playerId)] : (s.territory || 0);
         return `<span style="white-space:nowrap${me ? ';text-decoration:underline' : ''}">`
           + `<span style="color:${s.color || goFactionColor(s.faction)}">${dot}</span> `
-          + `${escapeHtml(s.name)}<b> ${s.territory || 0}</b>`
+          + `${escapeHtml(s.name)}<b> ${val}</b>`
           + `${s.botControlled ? '<span class="dim">(代打)</span>' : (s.isAI ? '<span class="dim">(电脑)</span>' : '')}</span>`;
       }).join('<span class="dim"> · </span>')
-    : `<span>● 黑 <b>${sc.black || 0}</b>目 · ○ 白 <b>${sc.white || 0}</b>目</span>`;
+    : `<span>● 黑 <b>${cs ? (cs.black || 0) : (sc.black || 0)}</b>子 · ○ 白 <b>${cs ? (cs.white || 0) : (sc.white || 0)}</b>子</span>`;
   const sec = Math.ceil((g.msLeft || 0) / 1000);
   const evCn = { calm: '平静', flourish: '繁盛（演化 ×2）', frost: '寒潮（暂停演化）', mutate: '拥挤突变（阈值 5）' }[g.event] || '平静';
   const phaseTxt = g.phase === 'over' ? '终局' : (myTurn ? '▶ 轮到你' : '等待对手…');
@@ -2497,7 +2642,7 @@ function renderGoHud() {
   // 比分/结果面板
   if (gres) {
     gres.style.display = '';
-    // 多方（2..8）：列出全部席位目数并标出自己；兼容旧两方快照
+    // 多方（2..8）：列出全部席位数子总分并标出自己；兼容旧两方快照
     let html = '';
     if (seats.length) {
       const mySeat = seats.find(s => s.playerId != null && sameId(s.playerId, uid));
@@ -2505,53 +2650,81 @@ function renderGoHud() {
         const me = s.playerId != null && sameId(s.playerId, uid);
         const tag = s.lost ? '<span style="color:#ff6b6b">出局</span>'
           : (s.isTurn ? '<span style="color:#ffd479">行动中</span>' : '');
+        const val = (csByPid[String(s.playerId)] != null) ? csByPid[String(s.playerId)] : (s.territory || 0);
         return `<div class="stat"><span>${i + 1}. ${me ? '▶ ' : ''}<span style="color:${s.color || goFactionColor(s.faction)}">●</span> ${escapeHtml(s.name)}${s.isAI ? '<span class="dim"> 电脑</span>' : (s.botControlled ? '<span class="dim"> 代打</span>' : '')}</span>`
-          + `<b>${s.territory || 0} 目 ${tag}</b></div>`;
+          + `<b>${val} 子 ${tag}</b></div>`;
       }).join('');
-      if (mySeat) html = `<div class="stat"><span>你</span><b>第 ${seats.indexOf(mySeat) + 1} 名 · ${mySeat.territory || 0} 目</b></div>` + html;
+      if (mySeat) {
+        const myVal = (csByPid[String(mySeat.playerId)] != null) ? csByPid[String(mySeat.playerId)] : (mySeat.territory || 0);
+        html = `<div class="stat"><span>你</span><b>第 ${seats.indexOf(mySeat) + 1} 名 · ${myVal} 子</b></div>` + html;
+      }
     } else {
-      const mine = myF === 1 ? (sc.black || 0) : (myF === 2 ? (sc.white || 0) : 0);
-      const theirs = myF === 1 ? (sc.white || 0) : (myF === 2 ? (sc.black || 0) : 0);
-      html = `<div class="stat"><span>你</span><b>${mine} 目</b></div>` +
-        `<div class="stat"><span>对手</span><b>${theirs} 目</b></div>`;
+      const mine = myF === 1 ? (cs ? (cs.black || 0) : (sc.black || 0)) : (myF === 2 ? (cs ? (cs.white || 0) : (sc.white || 0)) : 0);
+      const theirs = myF === 1 ? (cs ? (cs.white || 0) : (sc.white || 0)) : (myF === 2 ? (cs ? (cs.black || 0) : (sc.black || 0)) : 0);
+      html = `<div class="stat"><span>你</span><b>${mine} 子</b></div>` +
+        `<div class="stat"><span>对手</span><b>${theirs} 子</b></div>`;
     }
     html += `<div class="stat"><span>奖惩图案</span><b>${g.bonusSeen || 0}</b></div>`;
     if (g.result) {
       const win = g.result.winner != null && sameId(g.result.winner, uid);
       const draw = g.result.winner == null;
       html += `<div style="margin-top:6px;color:${draw ? '#ffd479' : (win ? '#3fb950' : '#ff6b6b')}">` +
-        `<b>${draw ? '平局' : (win ? '你胜' : '你负')}</b> · ${({ pass: '全员停手', max_moves: '手数上限', wiped: '被吃光', timeout: '超时判负', resign: '认输', last_standing: '只剩一方' }[g.result.reason]) || g.result.reason}</div>`;
+        `<b>${draw ? '平局' : (win ? '你胜' : '你负')}</b> · ${({ pass: '双方停手（数子结算）', max_moves: '手数上限', wiped: '一方被吃光', timeout: '超时判负', resign: '认输', last_standing: '只剩一方' }[g.result.reason]) || g.result.reason}</div>`;
     }
     gres.innerHTML = html;
   }
-  // 终局弹窗（一次）
+  // 终局弹窗（一次）· 中国规则数子结算
   if (g.result && !state._goResultShown) {
     state._goResultShown = true;
     const win = g.result.winner != null && sameId(g.result.winner, uid);
     const draw = g.result.winner == null;
     const wn = g.result.winnerName || '对手';
-    const reasonCn = ({ pass: '全员连续停手', max_moves: '达到手数上限', wiped: '一方被吃光', timeout: '累计超时', resign: '认输', last_standing: '只剩一方' }[g.result.reason]) || g.result.reason;
-    // 多方：列出终局排名（领地目数从高到低）
+    const reasonCn = ({ pass: '双方停手（连续 Pass）', max_moves: '达到手数上限', wiped: '一方被吃光', timeout: '累计超时', resign: '认输', last_standing: '只剩一方' }[g.result.reason]) || g.result.reason;
+    // 中国规则数子口径：自己的子数 + 围住的空点数 = 总分（多者胜，不贴子）
+    const cs = g.chineseScore || {};
     const rank = (g.result.ranked && g.result.ranked.length) ? g.result.ranked : null;
+    const fmtRow = (r, i) => {
+      const total = (r.score != null) ? r.score : (r.territory || 0);
+      const stones = (r.stones != null) ? r.stones : '?';
+      const empty = (r.empty != null) ? r.empty : '?';
+      return `${i + 1}. ${escapeHtml(r.name)} <b>${total}</b> 子（子 ${stones} + 空点 ${empty}）`;
+    };
     const rankTxt = rank
-      ? rank.map((r, i) => `${i + 1}. ${escapeHtml(r.name)} <b>${r.territory}</b> 目`).join('<br>')
-      : `● 黑 ${sc.black || 0} 目 &nbsp; ○ 白 ${sc.white || 0} 目`;
-    modal('终局 · ' + reasonCn, `
+      ? rank.map(fmtRow).join('<br>')
+      : `● 黑 ${cs.black != null ? cs.black : (sc.black || 0)} 子 &nbsp; ○ 白 ${cs.white != null ? cs.white : (sc.white || 0)} 子`;
+    modal('对局结束 · 数子结算（' + reasonCn + '）', `
       <div style="font-size:14px;line-height:1.8">
         <div style="color:${draw ? '#ffd479' : (win ? '#3fb950' : '#ff6b6b')};font-weight:600;margin-bottom:6px">
-          ${draw ? '平局' : (win ? '🏆 你赢了' : '💀 你输了')}
+          ${draw ? '平局（并列，不贴子）' : (win ? '🏆 你赢了' : '💀 你输了')}
         </div>
+        <div style="color:#8b949e;font-size:12px;margin-bottom:4px">终局方式：${escapeHtml(reasonCn)} · 中国规则：子数 + 围住的空点</div>
         ${rankTxt}<br>
         ${!draw ? (win ? '获胜：' : '负于：') + escapeHtml(wn) : '并列，无唯一胜者'}<br>
         <span style="color:#8b949e;font-size:12px">手数 ${g.result.moves} · ${(g.bonusSeen || 0)} 次图案奖</span>
-        <div style="margin-top:8px;color:#8b949e;font-size:12px">seed + 手顺可完整复盘（同 seed 逐手一致）</div>
+        <div style="margin-top:8px;color:#8b949e;font-size:12px">吃光对方不算赢——只体现为其子数与占空点变少；胜负由数子决定。</div>
+        <div style="margin-top:4px;color:#8b949e;font-size:12px">seed + 手顺可完整复盘（同 seed 逐手一致）</div>
       </div>
     `);
   }
 }
 
+// 胜利条件常驻行：文本 = snapshot.settings.victoryLines（后端权威），全关时提醒。
+function renderVictoryHud() {
+  const el = $('victory-hud');
+  if (!el) return;
+  const s = (state.world && state.world.settings) || {};
+  const mode = isGo() ? 'go' : 'rts';
+  const txt = victoryLinesText(s.victoryLines, mode);
+  const none = txt.indexOf('无（') === 0;
+  el.innerHTML = `胜利条件：<b>${escapeHtml(txt)}</b>`;
+  el.style.display = 'block';
+  el.style.color = none ? '#ffa94d' : '#e6edf3';
+}
+
 function renderHud() {
   if (!state.world) return;
+  // 胜利条件常驻行（rts 与 go 都显示；文本严格来自 snapshot.settings.victoryLines）
+  renderVictoryHud();
   // go（回合制）模式：隐藏全部 rts 元素，只显示 go 专用 HUD。
   if (isGo()) { renderGoHud(); return; }
   // rts 模式：确保 go 专用元素隐藏
