@@ -11,7 +11,7 @@
     "test:engine": "node --test --expose-gc tests/engine.test.mjs",
     "test:api": "node --test --expose-gc tests/api.test.mjs",
     "test:multi": "node --test --expose-gc tests/multiplayer.test.mjs",
-    "test": "node --test --expose-gc tests/kernels.test.mjs tests/engine.test.mjs tests/api.test.mjs tests/multiplayer.test.mjs tests/go_mode.test.mjs tests/life_cell_combat.test.mjs tests/rts_spacing.test.mjs tests/room_lobby.test.mjs tests/room_settings.test.mjs tests/admin.test.mjs tests/maintenance.test.mjs tests/victory_config.test.mjs tests/victory_config.qa.test.mjs tests/board_editor.test.mjs",
+    "test": "node --test --expose-gc tests/kernels.test.mjs tests/engine.test.mjs tests/api.test.mjs tests/multiplayer.test.mjs tests/go_mode.test.mjs tests/life_cell_combat.test.mjs tests/rts_spacing.test.mjs tests/room_lobby.test.mjs tests/room_settings.test.mjs tests/admin.test.mjs tests/maintenance.test.mjs tests/victory_config.test.mjs tests/victory_config.qa.test.mjs tests/board_editor.test.mjs tests/board_editor.qa.test.mjs",
     "test:smoke": "bash tests/smoke.sh",
     "test:rooms": "node --test --expose-gc tests/room_lobby.test.mjs tests/room_settings.test.mjs tests/room_cap.test.mjs",
     "test:admin": "node --test --expose-gc tests/admin.test.mjs",
