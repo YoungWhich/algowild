@@ -7,6 +7,9 @@ server/data/
 # WorkBuddy 项目记忆 / agent 数据
 .workbuddy/
 
+# 线上发布工具生成的标记文件（每次部署自动生成，不入库）
+.*.genie
+
 # 日志
 *.log
 
