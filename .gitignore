@@ -39,3 +39,9 @@ _run_server.mjs
 _cpolar_out.txt
 _server_out.txt
 cpolar_run.log
+
+# agent 临时调试输出（防复发）
+_*.txt
+_*.log
+_*.mjs
+_trash_*/
