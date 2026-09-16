@@ -9,6 +9,17 @@ PORT=17000 node server/index.js
 - HTTP 与 WebSocket 同端口： WebSocket 地址为 `ws://<host>:<port>/ws`。
 - 需要 Node 20+（建议 22）。
 
+### 环境变量怎么注入
+
+服务**不会**自动读取 `.env` 文件，需二选一：
+
+```
+node --env-file=.env server/index.js      # Node 20.6+
+```
+或由 systemd / pm2 / Docker 直接注入环境变量。
+
+仓库提供 `.env.example`，复制为 `.env` 后填写即可（`.env` 已在 `.gitignore` 中，不会被提交）。
+
 ---
 
 ## 环境变量
