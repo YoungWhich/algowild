@@ -295,8 +295,10 @@ export function installGoMode(World) {
     // ① 校验整批（原子性：任一非法则整批拒绝，棋盘不变）
     const seen = new Set();
     for (const m of moves) {
-      if (!m || typeof m.lx !== 'number' || typeof m.ly !== 'number') return { ok: false, reason: 'bad_move' };
-      const lx = m.lx | 0, ly = m.ly | 0;
+      // 坐标必须是**有限整数**：拒绝 NaN / Infinity / 浮点（否则 `lx|0` 会静默截断为合法格，
+      // 如 1e999→0、3.7→3）。与 gomoku / weiqi 的校验口径一致（BH2-GO-02/03）。
+      if (!m || !Number.isInteger(m.lx) || !Number.isInteger(m.ly)) return { ok: false, reason: 'bad_move' };
+      const lx = m.lx, ly = m.ly;
       // 形状/虚空感知：越界 ∪ 形状外 ∪ 虚空 → 不可落子（统一复用 oob，前端零改动）。
       if (this._isWall(lx, ly)) return { ok: false, reason: 'oob' };
       const key = lx * W + ly;
@@ -307,7 +309,7 @@ export function installGoMode(World) {
     }
     const before = this._goSnapshot();   // 落子前棋盘（供诊断/劫判定保留）
     // ② 一次性落下全部棋子
-    const pts = moves.map(m => ({ lx: m.lx | 0, ly: m.ly | 0 }));
+    const pts = moves.map(m => ({ lx: m.lx, ly: m.ly }));
     for (const p of pts) L[p.lx][p.ly] = f;
     // ③ 统一结算提子：对本批**所有落点** 4 邻的敌方团，无气则整团清除（去重，避免重复提）
     let captured = 0;
@@ -901,11 +903,18 @@ export function installGoMode(World) {
     if (g.passStreak >= seats.length) endReason = 'pass';
     else if (g.moveNo >= this.goLimits.maxMoves) endReason = 'max_moves';
 
-    // 累计超时判负
+    // 累计超时判负：达累计超时上限者先**判负**（置 lost 剔出胜者池），再触发终局。
+    // 否则 _goFinish 纯按数子分排名（认输/被吃光才剔除），地盘大的超时者反而被判胜（BH2-GO-01）。
+    let anyTimeout = false;
     for (const pid of seats) {
       const p = this.players[pid];
-      if (p && (p.goTimeouts || 0) >= this.goLimits.maxTimeouts && !endReason) endReason = 'timeout';
+      if (p && (p.goTimeouts || 0) >= this.goLimits.maxTimeouts) {
+        p.lost = true;
+        p.lostReason = 'timeout';
+        anyTimeout = true;
+      }
     }
+    if (anyTimeout && !endReason) endReason = 'timeout';
     if (endReason) { this._goFinish(endReason, events); return; }
 
     // 轮到下一位（跳过已认输者）
@@ -1019,9 +1028,10 @@ export function installGoMode(World) {
       return { ok: true, resign: true };
     }
     // 解析落子集合：新格式 {moves:[{lx,ly},...]}；兼容旧格式 {lx,ly}（视为 1 颗的一批）。
+    // 坐标必须为有限整数（Number.isInteger），与 gomoku/weiqi 一致；否则落子前即拒绝（bad_move）。
     let moves;
     if (Array.isArray(data.moves)) moves = data.moves;
-    else if (typeof data.lx === 'number' && typeof data.ly === 'number') moves = [{ lx: data.lx, ly: data.ly }];
+    else if (Number.isInteger(data.lx) && Number.isInteger(data.ly)) moves = [{ lx: data.lx, ly: data.ly }];
     else return { ok: false, reason: 'bad_move' };
     if (moves.length === 0) return { ok: false, reason: 'bad_move' };
     if (moves.length > this.stonesPerTurn) return { ok: false, reason: 'too_many_stones' };

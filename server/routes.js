@@ -34,7 +34,10 @@ function adminUsernames() {
 //     （可写在 body.adminKey、请求头 x-admin-key 或 ?adminKey=）。用于线上动态 IP 场景。
 //   以上两项都可写在 DB 设置里（meta 表：admin_allowed_ips / admin_access_key），便于随部署生效；环境变量优先。
 function clientIp(req) {
-  const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  // 默认**不信任** X-Forwarded-For：防伪造来源 IP 绕过管理员白名单 / IP 限制。
+  // 仅当显式设置 TRUST_PROXY=1（部署在可信反代之后）时才采信首个 XFF 地址。
+  const trustProxy = process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true';
+  const xff = trustProxy ? String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() : '';
   let ip = xff || (req.socket && req.socket.remoteAddress) || req.ip || '';
   if (ip.startsWith('::ffff:')) ip = ip.slice(7);
   if (ip === '::1') ip = '127.0.0.1';
@@ -337,6 +340,9 @@ export function createRouter() {
     if (b.worldId) {
       const w = ensureWorld(b.worldId);
       if (!w) return res.json({ code: 404, message: 'world_not_found', data: null });
+      // 归属校验（防越权）：仅世界归属者（房主）可用 worldId 绑定既有世界并改写其设置。
+      // 否则任意登录用户仅凭公开房里暴露的 worldId 即可篡改他人世界的 maxPlayers 等设置。
+      if (w.ownerId !== req.user.id) return res.json({ code: 403, message: 'not_owner', data: null });
       const room = await createRoom({
         ownerId: req.user.id, name: b.name, maxPlayers: b.maxPlayers || w.maxPlayers,
         visibility: b.visibility, password: b.password, mode: w.mode,
@@ -346,7 +352,7 @@ export function createRouter() {
         goLimits: b.goLimits,
       });
       attachWorld(room, w.worldId, w.mode);
-      // 房间设定的席位数同步到世界（电脑玩家同样占席位）
+      // 房主已通过归属校验，可按房间设定同步席位数（电脑玩家同样占席位）
       if (b.maxPlayers) w.maxPlayers = room.maxPlayers;
       if (w.hostId == null) w.hostId = req.user.id;
       return res.json({ code: 0, message: 'ok', data: {
@@ -531,7 +537,8 @@ export function createRouter() {
     if (!room || room.closed) return res.json({ code: 4001, message: 'room_not_found', data: null });
     const w = worldForRoom(room);
     if (!w) return res.json({ code: 4004, message: 'world_not_ready', data: null });
-    if (!w.players[req.user.id]) return res.json({ code: 403, message: 'not_in_room', data: null });
+    // 增删电脑玩家为房主专属：收紧"在座即可"的旧宽松策略，防止非房主占满席位。
+    if (w.hostId !== req.user.id) return res.json({ code: 403, message: 'not_host', data: null });
     const ai = w.addAI();
     if (ai && ai.rejected) return res.json({ code: 4002, message: ai.rejected, data: null });
     return res.json({ code: 0, message: 'ok', data: { ai: { id: ai.id, name: ai.name }, room: roomInfo(room, req.user.id) } });
@@ -543,7 +550,7 @@ export function createRouter() {
     if (!room || room.closed) return res.json({ code: 4001, message: 'room_not_found', data: null });
     const w = worldForRoom(room);
     if (!w) return res.json({ code: 4004, message: 'world_not_ready', data: null });
-    if (!w.players[req.user.id]) return res.json({ code: 403, message: 'not_in_room', data: null });
+    if (w.hostId !== req.user.id) return res.json({ code: 403, message: 'not_host', data: null });
     const ok = w.removeAI(req.params.aiId);
     if (!ok) return res.json({ code: 404, message: 'ai_not_found', data: null });
     return res.json({ code: 0, message: 'ok', data: { room: roomInfo(room, req.user.id) } });

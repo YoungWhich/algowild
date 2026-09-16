@@ -356,11 +356,16 @@ export class World {
         if (p.seedRegen >= (p.seedRegenTicks || World.SEED_REGEN_TICKS)) { p.seeds++; p.seedRegen = 0; }
       }
       if (imp && imp.dash && p.dashCharge >= 1) {
-        // 冲刺：瞬时给一个巨大的冲量
-        const dx = imp.dash.dx || 0, dy = imp.dash.dy || 0;
-        const l = Math.hypot(dx, dy) || 1;
-        p.vx += (dx / l) * 2.4;
-        p.vy += (dy / l) * 2.4;
+        // 冲刺：瞬时给一个巨大的冲量。
+        // 防御性兜底：dash 的 dx/dy 若为非有限数值（NaN/Infinity，例如绕过 net 校验
+        // 的内部路径或畸形 payload），`hypot(Inf)=Inf` → `Inf/Inf=NaN` 会污染 vx/vy →
+        // 坐标 NaN → 下一 tick 在 `_life[NaN]` 抛异常，世界 tick 永久崩溃。
+        // 故先规整为有限值再计算，非有限一律当 0（不产生位移）。
+        const ddx = Number.isFinite(imp.dash.dx) ? imp.dash.dx : 0;
+        const ddy = Number.isFinite(imp.dash.dy) ? imp.dash.dy : 0;
+        const l = Math.hypot(ddx, ddy) || 1;
+        p.vx += (ddx / l) * 2.4;
+        p.vy += (ddy / l) * 2.4;
         p.dashCharge = 0;
         p.dashCooldown = 60; // 3s @ 20TPS
         events.push({ type: 'dash', playerId: p.id });
@@ -551,6 +556,10 @@ export class World {
           p.invulnTicks = World.INVULN_TICKS;   // grace period after respawn
           if (p.deaths >= World.DEATH_LIMIT) {
             p.lost = true; p.lostReason = 'military';
+            // 军事出局者不再存活（与 wiped 出局路径对齐）：
+            // 上一行复活块刚把 alive=true/hp=hpMax，此处必须收回，否则出局者变成"满血幽灵"，
+            // 仍被 P6 攻击循环锁定、可移动/攻击/收资源，与"已出局不再复活"的注释相悖。
+            p.alive = false; p.hp = 0;
             // 出局者清空棋盘势力，让土地回归中立、对局可终结（≥30 分钟长局的关键）
             this._lifeWipeFaction(p);
             // F5（QA P2-3）：上一行刚设的 lostReason 必须塞进事件，否则客户端

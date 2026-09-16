@@ -261,6 +261,22 @@ export function attachWS(httpServer) {
               err(ERR.BAD_INTENT, 'bad_move'); return;
             }
           }
+          // 校验 dash：与 move 同款（dx/dy 必须有限数值）。
+          // 畸形 dx/dy（如 JSON 合法但解析为 Infinity 的 `1e999`）会让 `hypot(Inf)=Inf`、
+          // `Inf/Inf=NaN` 污染 vx → 坐标 NaN → 之后每 tick 在 `_life[NaN]` 抛异常，世界永久崩溃。
+          if (intent.dash) {
+            const d = intent.dash;
+            if (!d || typeof d.dx !== 'number' || typeof d.dy !== 'number' || !Number.isFinite(d.dx) || !Number.isFinite(d.dy)) {
+              err(ERR.BAD_INTENT, 'bad_dash'); return;
+            }
+          }
+          // 校验 attack：tx/ty 必须有限数值（同款），否则攻击瞄准点可能非有限。
+          if (intent.attack) {
+            const atk = intent.attack;
+            if (!atk || typeof atk.tx !== 'number' || typeof atk.ty !== 'number' || !Number.isFinite(atk.tx) || !Number.isFinite(atk.ty)) {
+              err(ERR.BAD_INTENT, 'bad_attack'); return;
+            }
+          }
           const q = getQueue(worldId).get(ws);
           if (!q) return;
           // 故意把消息时间戳忽略：服务器只按到达时间 FIFO
