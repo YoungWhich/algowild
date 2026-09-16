@@ -1650,6 +1650,7 @@ function openSocket() {
     ws.send(JSON.stringify({ type: 'hello', data: { token: state.token, worldId: state.worldId } }));
     $('room-panel').style.display = 'block';
     $('chatbox').style.display = 'flex';
+    $('chat-log').style.display = 'flex';
     if (!state._everOpened) {
       state._everOpened = true;
       toast('已进入房间 · 分享链接给好友 → 算法信号密度上升、涌现更频繁', 3500);
@@ -1799,10 +1800,15 @@ function openSocket() {
         }
       }
       renderHud();
-    } else if (m.type === 'chat') {
-      const c = m.data; state.chat.push(c);
-      if (state.chat.length > 5) state.chat.shift();
-      toast(`${c.from}: ${c.text}`);
+      } else if (m.type === 'chat') {
+        const c = m.data; state.chat.push(c);
+        if (state.chat.length > 50) state.chat.shift();
+        const log = $('chat-log');
+        const line = document.createElement('div'); line.className = 'c';
+        line.innerHTML = `<b>${escapeHtml(c.from)}</b>：${escapeHtml(c.text)}`;
+        log.appendChild(line);
+        log.scrollTop = log.scrollHeight;
+        toast(`${c.from}: ${c.text}`);
     } else if (m.type === 'error') {
       // welcome 到达前收到的错误 = hello 失败一次（用于触发 REST 重建路径）
       if (state._awaitingWelcome) {
@@ -3658,6 +3664,7 @@ function onLogout() {
   $('world-panel').style.display = 'none';
   $('room-panel').style.display = 'none';
   $('chatbox').style.display = 'none';
+  $('chat-log').style.display = 'none';
   const adminEntry = $('admin-entry');
   if (adminEntry) adminEntry.style.display = 'none';
   $('hud').innerHTML = '单机：移动 · 收集资源 · 等待涌现单位<br>联机：开房 → 分享码 → 加入';

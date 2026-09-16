@@ -420,15 +420,23 @@ export function emptyRoomGraceMs() {
   return Math.max(0, Math.min(1440, v)) * 60 * 1000;
 }
 
-/** 房间是否还有人类玩家（大厅看 members，对局看世界里的非 AI / 非代打玩家）。 */
+/**
+ * 房间是否还有人类玩家。
+ * 语义分两阶段：
+ *   - 世界已建（room.worldId 非空）→ 只以「世界内非 AI 且非掉线代打（botControlled）」的玩家为准；
+ *     玩家掉线被 AI 接手（botControlled=true）后不再视为有人。世界不在内存（重启/已释放）同样视为无人。
+ *   - 世界未建（大厅等待）→ 退回看 room.members 里是否有等待者。
+ */
 export function roomHasHuman(room) {
-  if (room.members && room.members.size > 0) return true;
-  const w = roomWorld(room);
-  if (!w) return false; // 已建世界但世界不在内存：视为无人（宽限后清理）
-  for (const p of Object.values(w.players)) {
-    if (!p.isAI && !p.botControlled) return true;
+  if (room.worldId) {
+    const w = roomWorld(room);
+    if (!w) return false; // 已建世界但世界不在内存：视为无人（宽限后清理）
+    for (const p of Object.values(w.players)) {
+      if (!p.isAI && !p.botControlled) return true;
+    }
+    return false;
   }
-  return false;
+  return !!(room.members && room.members.size > 0);
 }
 
 /** 释放内存中的世界及其相关映射（tick 循环按 activeWorlds 迭代，删除后即停止推进）。 */

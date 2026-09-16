@@ -238,16 +238,24 @@
       <div class="row" style="margin-top:6px">
         <button id="briefing-btn" style="flex:1">📜 任务简报</button>
       </div>
-      <div id="stock-label" style="font-size:11px;color:#8b949e;margin-top:8px">个人资源（6 类各攒到 30 = 奇点胜）</div>
-      <div id="stock-list" style="font-size:11px"></div>
       <div id="score-board-label" style="font-size:11px;color:#8b949e;margin-top:8px">领土榜 · 谁先占满 16 区</div>
       <div id="score-board" style="font-size:11px"></div>
-      <div id="win-list-label" style="font-size:11px;color:#8b949e;margin-top:8px">胜利条件进度</div>
-      <div id="win-list" style="font-size:11px"></div>
-      <div id="res-list-label" style="font-size:11px;color:#8b949e;margin-top:8px">资源</div>
-      <div id="res-list" style="font-size:11px"></div>
-      <div id="emergent-list-label" style="font-size:11px;color:#8b949e;margin-top:8px">已涌现</div>
-      <div id="emergent-list" style="font-size:11px;max-height:140px;overflow:auto"></div>
+      <details style="margin-top:8px">
+        <summary id="stock-label" style="font-size:11px;color:#8b949e;cursor:pointer">个人资源（6 类各攒到 30 = 奇点胜）</summary>
+        <div id="stock-list" style="font-size:11px;margin-top:4px"></div>
+      </details>
+      <details style="margin-top:6px">
+        <summary id="win-list-label" style="font-size:11px;color:#8b949e;cursor:pointer">胜利条件进度</summary>
+        <div id="win-list" style="font-size:11px;margin-top:4px"></div>
+      </details>
+      <details style="margin-top:6px">
+        <summary id="res-list-label" style="font-size:11px;color:#8b949e;cursor:pointer">资源</summary>
+        <div id="res-list" style="font-size:11px;margin-top:4px"></div>
+      </details>
+      <details style="margin-top:6px">
+        <summary id="emergent-list-label" style="font-size:11px;color:#8b949e;cursor:pointer">已涌现</summary>
+        <div id="emergent-list" style="font-size:11px;margin-top:4px;max-height:140px;overflow:auto"></div>
+      </details>
     </div>
     <div class="panel help" id="rts-help">
       <b>30 秒看懂怎么玩：</b><br>
@@ -268,6 +276,7 @@
       <div id="score-hud"></div>
       <div id="toast"></div>
       <div id="go-res"></div>
+      <div id="chat-log" style="display:none"></div>
       <div id="chatbox" style="display:none">
         <input id="chat-input" placeholder="聊天..." maxlength="200">
         <button id="chat-send">发送</button>
@@ -284,6 +293,6 @@
   </div>
 </div>
 
-<script type="module" src="./client.js?v=20260912l"></script>
+<script type="module" src="./client.js?v=20260915a"></script>
 </body>
 </html>

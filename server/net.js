@@ -233,6 +233,9 @@ export function attachWS(httpServer) {
           if (!authed || !worldId) { err(ERR.BAD_AUTH, 'not_authed'); return; }
           const intent = msg.data || {};
           const w = activeWorlds.get(worldId);
+          // 未点「开始游戏」前拒绝一切玩家 intent（落子/移动）。AI（stepAI / _goMaybeAIMove）
+          // 不经过本 WS intent 路径，故不受影响；重连（HELLO/JOIN）与观察（CHAT）也不在此拦截。
+          if (w && !w.started) { err(ERR.FORBIDDEN, 'not_started'); return; }
           // go 模式：不走 intentQueue/20TPS tick，直接调用 applyGoIntent（go 没有常规 tick）。
           if (w && w.mode === 'go') {
             if (intent.go && typeof intent.go === 'object') {
