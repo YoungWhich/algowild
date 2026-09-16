@@ -326,11 +326,31 @@ export function installGoMode(World) {
         captured += this._goTryCapture(nx, ny);
       }
     }
-    // ④ 整批自杀判定：未提子，且**全部**落点所在团都无气 → 非法，整批回滚
-    if (captured === 0) {
-      let anyLib = false;
-      for (const p of pts) if (this._goLiberties(p.lx, p.ly) > 0) { anyLib = true; break; }
-      if (!anyLib) {
+    // ④ 自杀判定（修正）：每颗落子所在同色团都必须至少有 1 气，否则整批回滚。
+    // 旧实现用"任一落点有气即放行"，会漏掉"同批中某颗单独成无气团、另一颗有气"的情形，
+    // 导致无气死子残留在盘上（违反围棋基本规则）。故改为逐团检查（含提子后状态）。
+    {
+      const chk = new Set();
+      let suicide = false;
+      for (const p of pts) {
+        const key = p.lx * W + p.ly;
+        if (chk.has(key)) continue;
+        if (this._goLiberties(p.lx, p.ly) === 0) { suicide = true; break; }
+        // 标记整团已检查，避免同团重复判定
+        const f = L[p.lx][p.ly];
+        const stack = [[p.lx, p.ly]];
+        chk.add(key);
+        while (stack.length) {
+          const [cx, cy] = stack.pop();
+          for (const [dx, dy] of NEI4) {
+            const nx = cx + dx, ny = cy + dy;
+            if (this._isWall(nx, ny)) continue;
+            const k = nx * W + ny;
+            if (!chk.has(k) && L[nx][ny] === f) { chk.add(k); stack.push([nx, ny]); }
+          }
+        }
+      }
+      if (suicide) {
         for (const p of pts) L[p.lx][p.ly] = 0;
         return { ok: false, reason: 'suicide' };
       }

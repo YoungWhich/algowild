@@ -70,6 +70,20 @@ test('GM-03 禁自杀：落子在无气且未提子的点 → suicide，棋盘�
   assert.equal(L[3][3], 0, '自杀手应回滚，落点保持空');
 });
 
+test('GM-03b 批处理部分自杀：同批中某颗成无气团、另一颗有气 → 整批拒 suicide，棋盘不变', () => {
+  const { w } = seated();
+  const L = w._life;
+  const B = fB(w), W = fW(w);
+  // 用白子围死 (5,5) 的 4-邻（白子自身均有气，不会被提）
+  L[4][5] = W; L[6][5] = W; L[5][4] = W; L[5][6] = W;
+  // 黑同批落 (5,5)（自杀点，无气）与 (10,10)（开阔有气）两颗
+  const r = w._goPlayBatch(B, [{ lx: 5, ly: 5 }, { lx: 10, ly: 10 }], []);
+  assert.equal(r.ok, false, '部分自杀批必须被拒');
+  assert.equal(r.reason, 'suicide');
+  assert.equal(L[5][5], 0, '自杀落点应回滚');
+  assert.equal(L[10][10], 0, '同批另一颗也应随整批回滚');
+});
+
 test('GM-04 有气可落：紧邻敌子但自身有气 → ok', () => {
   const { w } = seated();
   const L = w._life;

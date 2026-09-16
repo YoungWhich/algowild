@@ -118,6 +118,24 @@ test('BH2-RTS-01 军事出局（deaths 达 DEATH_LIMIT）后玩家不应存活',
   assert.equal(a.alive, false, '出局者不应仍存活（当前 alive=true → 满血幽灵继续参战）');
 });
 
+// ============================================================ BUG-8: 手动攻击落点无距离校验 → 远程自瞄/穿距
+// net.js 仅校验 attack.tx/ty 为有限数值，**未校验落点离攻击者的距离**；engine P6 直接用该坐标当攻击点，
+// 对 R=3 内任意目标（含 PvP 对手）造成伤害，不论攻击者本人在哪。
+// 改包客户端可把 tx/ty 设为地图上任意目标坐标，从另一端锁敌打人。修复：落点夹取到攻击者 AUTO_ATTACK_R 内。
+test('BH2-RTS-02 手动攻击远程坐标(穿距) 不应伤害远处玩家（落点被夹取到攻击者 4 格内）', () => {
+  const w = new World('bh2_atk', 1, 42, { mode: 'rts' });
+  w.started = true;
+  const a = w.addPlayer(1, 'A');
+  const b = w.addPlayer(2, 'B');
+  a.x = 10; a.y = 10; a.alive = true; a.hp = a.hpMax || 100; a.invulnTicks = 0; a._atkCd = 0;
+  b.x = 150; b.y = 150; b.alive = true; b.hp = 100; b.invulnTicks = 0;
+  const hpBefore = b.hp;
+  // 改包客户端：把攻击瞄准点设到远处玩家 b 的位置（远超 AUTO_ATTACK_R=4）
+  w.intentQueue.push(1, { attack: { tx: b.x, ty: b.y } });
+  w.tickOnce();
+  assert.equal(b.hp, hpBefore, '远处玩家不应因远程攻击落点受到伤害（穿距漏洞）');
+});
+
 // ============================================================ 权限：非房主不能执行房主专属操作
 async function setupApp() {
   const app = express();

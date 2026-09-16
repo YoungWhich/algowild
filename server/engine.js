@@ -456,6 +456,17 @@ export class World {
         let ax, ay;
         if (typeof atk === 'object' && atk.tx !== undefined) { ax = atk.tx; ay = atk.ty; }
         else { ax = p.x; ay = p.y; }
+        // 服务端强制攻击落点必须在攻击者可达范围内（防改包客户端远程自瞄/穿距）：
+        // 与自动瞄准同距 AUTO_ATTACK_R。超距则把落点沿原方向夹回该范围（保留"手动瞄准"手感，
+        // 但杜绝从地图另一端锁敌打人）。net 层已校验 tx/ty 为有限数值，此处 ax/ay 必为有限。
+        const reach = World.AUTO_ATTACK_R;
+        const ddx = ax - p.x, ddy = ay - p.y;
+        const dist = Math.hypot(ddx, ddy);
+        if (dist > reach) {
+          const k = reach / (dist || 1);
+          ax = p.x + ddx * k;
+          ay = p.y + ddy * k;
+        }
         const R = 3;
         let best = null, bd = R * R;
         for (const e of this.entities) {
