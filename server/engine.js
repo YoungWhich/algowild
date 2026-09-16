@@ -147,9 +147,19 @@ export class World {
   seatCount() {
     return Object.keys(this.players).length;
   }
-  /** 房主设置的席位数上限（受硬上限 8 约束）。 */
+  /**
+   * 有效席位数上限 = min(房主设定, 硬上限 8, **模式级上限**)。
+   * 模式级上限由注册表元数据注入的 `this._mode.maxSeats` 提供（如 gomoku/weiqi 恒为 2 席，
+   * 禁止第 3 席人类或电脑）。主干**不出现任何 `mode === '<某模式>'` 字符串分支** —— 只读注册表。
+   * 未声明 maxSeats 的模式（rts/go）→ 上限不受模式约束（Infinity）。
+   */
   seatCap() {
-    return Math.max(1, Math.min(this.maxPlayers || World.MAX_SLOTS, this.maxTotal || World.MAX_SLOTS));
+    const modeCap = (this._mode && this._mode.maxSeats != null) ? this._mode.maxSeats : Infinity;
+    return Math.max(1, Math.min(
+      this.maxPlayers || World.MAX_SLOTS,
+      this.maxTotal || World.MAX_SLOTS,
+      modeCap,
+    ));
   }
   /** 是否还有空席位（人类与电脑共用同一池）。 */
   canAcceptHuman() {

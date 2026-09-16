@@ -146,7 +146,7 @@ test('QWA-04 分形棋盘：gomoku 墙格拒落(reason=wall)且棋盘不变；�
   const g = w._gomokuInit();
   assert.equal(g.size, 4, '容器尺寸应取 max(cfg.w,cfg.h)=4');
   for (const [x, y] of WALLS_4) {
-    assert.equal(g.board[y * 4 + x], 3, `(${x},${y}) 应标记为墙(3)`);
+    assert.equal(g.board[y * 4 + x], 99, `(${x},${y}) 应标记为墙(99)`);
   }
   const before = Array.from(g.board);
   for (const [x, y] of WALLS_4) {
@@ -166,7 +166,7 @@ test('QWA-05 分形棋盘：weiqi 墙格拒落(reason=wall)且棋盘不变；可
   w.addPlayer(1, 'B'); w.addPlayer(2, 'W');
   const g = w._weiqiInit();
   assert.equal(g.size, 4);
-  for (const [x, y] of WALLS_4) assert.equal(g.board[y * 4 + x], 3, `(${x},${y}) 应标记为墙(3)`);
+  for (const [x, y] of WALLS_4) assert.equal(g.board[y * 4 + x], 99, `(${x},${y}) 应标记为墙(99)`);
   const before = Array.from(g.board);
   for (const [x, y] of WALLS_4) {
     const r = w.applyWeiqiIntent(1, { lx: x, ly: y }, []);

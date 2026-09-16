@@ -9,7 +9,7 @@
 // 交互：点击交叉点 → 立即落一子；另有「停一手(pass)」按钮；双方连续 pass → 终局数子。
 
 const WEIQI_N = 19;    // 与后端 World.WEIQI_SIZE 一致（兜底）
-const WEIQI_WALL = 3;  // 容器内"墙"哨兵（形状外/虚空）：与后端 World.WEIQI_WALL 一致
+const WEIQI_WALL = 99;  // 容器内"墙"哨兵（形状外/虚空，落在阵营号 1..8 之外）：与后端 World.WEIQI_WALL 一致
 
 /**
  * 构造围棋视图。

@@ -9,7 +9,7 @@
 // 约定：本模块只读 env，不修改 client.js 的主干状态机。落子走"点击棋盘 → 立即发 intent"（五子棋无预选）。
 
 const GOMOKU_N = 15;    // 与后端 World.GOMOKU_SIZE 一致（兜底）
-const GOMOKU_WALL = 3;  // 容器内"墙"哨兵（形状外/虚空）：与后端 World.GOMOKU_WALL 一致
+const GOMOKU_WALL = 99;  // 容器内"墙"哨兵（形状外/虚空，落在阵营号 1..8 之外）：与后端 World.GOMOKU_WALL 一致
 
 /**
  * 构造五子棋视图。

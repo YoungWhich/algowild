@@ -17,9 +17,10 @@ import { registerMode } from './index.js';
 const WEIQI_SIZE = 19;      // 标准 19×19（默认棋盘边长，board=null 时）
 const WEIQI_KOMI = 7.5;     // 贴目（19×19 用 7.5）
 // 容器内"墙"哨兵：形状外/虚空/越界（来自编辑器形状）→ 不可落子 + 不计气 + 阻断连通。
-// 取值 3 与棋子 0/1/2 不相交；groupOf/areaScore 天然把非 0 非本方色当作阻断且不计气/不计地，
-// 故无需改动纯函数即可让"墙"生效（与 go 的 board 遮罩语义一致）。
-const WEIQI_WALL = 3;
+// 取值 99，**落在阵营号 1..8 之外**（`_factionOf` 只返回 1..8，故墙绝不可能与任何玩家阵营撞值）；
+// groupOf/areaScore 天然把非 0 非本方色当作阻断且不计气/不计地，故无需改动纯函数即可让"墙"生效
+// （与 go 的 board 遮罩语义一致）。容器为 Int8Array，99 不溢出（范围 -128..127）。
+const WEIQI_WALL = 99;
 const NEI4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
 // ---------------- 纯函数（操作任意棋盘数组，便于落子与 AI 共用） ----------------
@@ -178,7 +179,7 @@ const proto = {
    * 惰性初始化围棋状态容器。棋盘为**自带** Int8Array（不复用 rts 生命层 / 无演化）。
    * 尺寸：若房主用编辑器配了棋盘（this.board / this._bmp）→ 取 max(cfg.w, cfg.h)；
    *       否则默认 19×19（board=null → 无墙，行为与改造前逐字节一致）。
-   * 形状外/虚空/越界格标记为 WEIQI_WALL（3），使编辑的"形状外/虚空"对落子/提子/气生效。
+   * 形状外/虚空/越界格标记为 WEIQI_WALL（99），使编辑的"形状外/虚空"对落子/提子/气生效。
    */
   _weiqiInit() {
     const cfg = this.board || null;
@@ -189,7 +190,7 @@ const proto = {
     this.weiqi = {
       size,
       rev,
-      board: new Int8Array(size * size),   // 0 空 / 1 黑 / 2 白 / 3 墙，行优先
+      board: new Int8Array(size * size),   // 0 空 / 1 黑 / 2 白 / 99 墙，行优先
       seats: [],
       seatF: [],
       turnIdx: 0,
@@ -385,7 +386,8 @@ const proto = {
       return { ok: true, pass: true };
     }
     // 落子（每手 1 子）
-    if (typeof data.lx !== 'number' || typeof data.ly !== 'number') return { ok: false, reason: 'bad_move' };
+    // 坐标必须是**有限整数**：拒绝 NaN / Infinity / 浮点（否则 `lx|0` 会静默截断为合法格）。
+    if (!Number.isInteger(data.lx) || !Number.isInteger(data.ly)) return { ok: false, reason: 'bad_move' };
     const r = this._weiqiPlay(g.turn, data.lx | 0, data.ly | 0, evts);
     if (!r.ok) return r;
     const evt = evts.length ? evts[evts.length - 1] : null;
@@ -485,6 +487,7 @@ const def = {
   tickDriver: 'interval',
   intervalMs: 1000,
   boardMax: WEIQI_SIZE,     // 标准 19×19
+  maxSeats: 2,              // 围棋恒为 2 席（黑/白）；主干据此拒绝第 3 席（人类或电脑）
   growLifeLayer: false,
   availableVictoryLines: ['territory'],
 

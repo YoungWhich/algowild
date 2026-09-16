@@ -37,7 +37,7 @@ import { registerMode } from './index.js';
 
 // 常量（按模式实际情况调整）
 const TEMPLATE_SIZE = 8;     // 默认棋盘边长（board=null 时）
-const TEMPLATE_WALL = 3;     // 容器内"墙"哨兵（形状外/虚空/越界），取值与棋子 0/1/2 不相交
+const TEMPLATE_WALL = 99;    // 容器内"墙"哨兵（形状外/虚空/越界），取值 99 落在阵营号 1..8 之外，不与玩家阵营撞值
 
 // ---------------- 纯函数（不依赖 this，便于单测与 AI 复用） ----------------
 
@@ -62,7 +62,7 @@ const proto = {
     this.template = {
       size,
       rev,
-      board: new Int8Array(size * size),   // 0 空 / 1 甲 / 2 乙 / 3 墙
+      board: new Int8Array(size * size),   // 0 空 / 1 甲 / 2 乙 / 99 墙
       played: 0,                           // 已落子数（示例计数）
       // …按需补充：seats / turn / turnTicks / result / moveLog 等
     };

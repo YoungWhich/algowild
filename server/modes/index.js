@@ -14,6 +14,9 @@
 //                 'interval' → 1Hz 计时循环（go、棋盘类回合制）
 //   intervalMs?: number   interval 模式的步进周期（默认 1000）
 //   boardMax: number      可编辑棋盘尺寸上限（rts 32 / go 100）
+//   maxSeats?: number     **模式级席位上限**（可选）。如 gomoku / weiqi 恒为 2 席（黑/白）。
+//                         主干只读 `world._mode.maxSeats`：有效上限 = min(maxPlayers, 8, maxSeats ?? Infinity)，
+//                         据此在 addPlayer / addAI / canAcceptHuman 处拒绝超额的第 3 席（人类或电脑）。
 //   growLifeLayer?: bool  生命层是否随棋盘尺寸扩容（go=true）
 //   availableVictoryLines: string[]  本模式可用的胜利线（go 仅 territory）
 //   install?(World)        首次加载时把本模式的方法挂到 World.prototype（mixin）

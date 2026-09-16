@@ -18,7 +18,7 @@
 //   const VIEWS = { …, <id>: create<Template>View(VIEW_ENV) };
 
 const TEMPLATE_N = 8;     // 与后端 World.TEMPLATE_SIZE 一致（兜底）
-const TEMPLATE_WALL = 3;  // 容器内"墙"哨兵：与后端 World.TEMPLATE_WALL 一致
+const TEMPLATE_WALL = 99;  // 容器内"墙"哨兵（形状外/虚空/越界，落在阵营号 1..8 之外）：与后端 World.TEMPLATE_WALL 一致
 
 /**
  * 构造本模式视图（依赖注入工厂）。

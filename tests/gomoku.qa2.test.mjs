@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { World } from '../server/engine.js';
 
-const WALL = 3;                 // 容器内墙哨兵（形状外/虚空）——与 World.GOMOKU_WALL / WEIQI_WALL 一致
+const WALL = 99;                // 容器内墙哨兵（形状外/虚空）——与 World.GOMOKU_WALL / WEIQI_WALL 一致（落在阵营号 1..8 之外）
 const wall = WALL;
 
 // 形状串（与 server 端 SHAPE_CHARS 一致）：'#'=可落子 '.'=形状外 'x'=虚空。
@@ -45,13 +45,13 @@ function empties(g) {
   for (const v of g.board) if (v === 0) n++;
   return n;
 }
-/** 容器内墙格（3）计数。 */
+/** 容器内墙格（99）计数。 */
 function walls(g) {
   let n = 0;
   for (const v of g.board) if (v === wall) n++;
   return n;
 }
-/** 独立五连扫描器：容器内是否已存在任意 ≥5 连（墙（3）天然隔断）。 */
+/** 独立五连扫描器：容器内是否已存在任意 ≥5 连（墙（99）天然隔断）。 */
 function hasFive(g) {
   const size = g.size, b = g.board;
   const D = [[1, 0], [0, 1], [1, 1], [1, -1]];

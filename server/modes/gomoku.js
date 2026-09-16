@@ -16,9 +16,10 @@ import { registerMode } from './index.js';
 const GOMOKU_SIZE = 15;   // 标准 15×15（默认棋盘边长，board=null 时）
 const GOMOKU_WIN = 5;     // 5 连即胜（含 5 连以上）
 // 容器内"墙"哨兵：形状外/虚空/越界（来自编辑器形状）→ 不可落子 + 阻断连线。
-// 取值 3 与棋子 0/1/2 不相交；纯函数（checkWinAt/lineRun/moveScore）天然把非 0 非本方色当作阻断，
-// 故无需改动即可让"墙"生效（与 go 的 board 遮罩语义一致）。
-const GOMOKU_WALL = 3;
+// 取值 99，**落在阵营号 1..8 之外**（`_factionOf` 只返回 1..8，故墙绝不可能与任何玩家阵营撞值）；
+// 纯函数（checkWinAt/lineRun/moveScore）天然把非 0 非本方色当作阻断，故无需改动即可让"墙"生效
+// （与 go 的 board 遮罩语义一致）。容器为 Int8Array，99 不溢出（范围 -128..127）。
+const GOMOKU_WALL = 99;
 // 4 个方向：横 / 竖 / 主对角 / 副对角（正反两向在检查时对称扫描）。
 const DIRS = [[1, 0], [0, 1], [1, 1], [1, -1]];
 
@@ -123,7 +124,7 @@ const proto = {
    * 惰性初始化五子棋状态容器。棋盘为**自带** Int8Array（不复用 rts 生命层）。
    * 尺寸：若房主用编辑器配了棋盘（this.board / this._bmp）→ 取 max(cfg.w, cfg.h)；
    *       否则默认 15×15（board=null → 无墙，行为与改造前逐字节一致）。
-   * 形状外/虚空/越界格标记为 GOMOKU_WALL（3），使编辑的"形状外/虚空"对落子/连线生效。
+   * 形状外/虚空/越界格标记为 GOMOKU_WALL（99），使编辑的"形状外/虚空"对落子/连线生效。
    * @returns {object} this.gomoku
    */
   _gomokuInit() {
@@ -135,7 +136,7 @@ const proto = {
     this.gomoku = {
       size,
       rev,
-      board: new Int8Array(size * size),   // 0 空 / 1 黑 / 2 白 / 3 墙，行优先 idx=y*size+x
+      board: new Int8Array(size * size),   // 0 空 / 1 黑 / 2 白 / 99 墙，行优先 idx=y*size+x
       seats: [],                           // [playerId, ...] 行动顺序
       seatF: [],                           // 与 seats 平行的 faction 数组（1..8）
       turnIdx: 0,
@@ -255,7 +256,8 @@ const proto = {
     }
 
     // 落子（每手 1 子）
-    if (typeof data.lx !== 'number' || typeof data.ly !== 'number') return { ok: false, reason: 'bad_move' };
+    // 坐标必须是**有限整数**：拒绝 NaN / Infinity / 浮点（否则 `lx|0` 会静默截断为合法格）。
+    if (!Number.isInteger(data.lx) || !Number.isInteger(data.ly)) return { ok: false, reason: 'bad_move' };
     const x = data.lx | 0, y = data.ly | 0;
     const size = g.size;
     if (!inBounds(size, x, y)) return { ok: false, reason: 'oob' };
@@ -362,6 +364,7 @@ const def = {
   tickDriver: 'interval',   // 回合制：1Hz 计时循环驱动（无 20 TPS tick）
   intervalMs: 1000,
   boardMax: GOMOKU_SIZE,    // 标准 15×15
+  maxSeats: 2,              // 五子棋恒为 2 席（黑/白）；主干据此拒绝第 3 席（人类或电脑）
   growLifeLayer: false,     // 自带棋盘，不扩容 rts 生命层
   availableVictoryLines: ['territory'],
 

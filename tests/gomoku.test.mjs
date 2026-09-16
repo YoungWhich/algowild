@@ -30,9 +30,9 @@ function seated(seed = 42) {
 function put(w, x, y, f) { w.gomoku.board[K(x, y)] = f; }
 
 // 形状盘（地图编辑器挖墙）：4×4，墙 = (1,1)/(2,1)/(1,2)/(2,2)，可落 12 格。
-// 与 mode_wiring.qa.test.mjs 的 SHAPE_4 同款；墙哨兵值 = 3（World.GOMOKU_WALL）。
+// 与 mode_wiring.qa.test.mjs 的 SHAPE_4 同款；墙哨兵值 = 99（World.GOMOKU_WALL，落在阵营号 1..8 之外，不与玩家阵营撞值）。
 const SHAPE_4 = '####/#x.#/#..#/####';
-const WALL = 3;
+const WALL = 99;
 function shapedGomoku(seed = 7) {
   const w = new World('gomoku_shaped_' + seed, 1, seed, { mode: 'gomoku', board: { w: 4, h: 4, shape: SHAPE_4 } });
   w._skipAIFill = true;
