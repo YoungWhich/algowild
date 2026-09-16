@@ -413,6 +413,28 @@ export function installGoMode(World) {
    * @param {number} mode 0 正常 / 1 繁盛(2~3 步) / 2 寒潮(0 步) / 3 拥挤突变(诞生阈值 5)
    * @param {object[]} events
    */
+  /**
+   * 结算"本回合演化"的**得失归因**：与演化前棋盘逐格比对，得出各方新增/损失了多少子。
+   * 只做差量统计，不跑任何模拟、不消耗 RNG、不改动任何状态 → 对 IR-3a 确定性零影响。
+   * @param {Int8Array[]} before 演化前生命层
+   * @param {Int8Array[]} after  演化后生命层
+   * @returns {{gained:object, lost:object, gainedAt:object, lostAt:object}}
+   */
+  P._goEvolveDiff = function _goEvolveDiff(before, after) {
+    const W = this.lifeW;
+    const gained = {}, lost = {}, gainedAt = {}, lostAt = {};
+    const CAP = 40;   // 坐标明细上限，避免大波动时事件体膨胀
+    for (let x = 0; x < W; x++) {
+      for (let y = 0; y < W; y++) {
+        const b = before[x][y], a = after[x][y];
+        if (b === a) continue;
+        if (a > 0) { gained[a] = (gained[a] || 0) + 1; if ((gainedAt[a] || []).length < CAP) (gainedAt[a] = gainedAt[a] || []).push([x, y]); }
+        if (b > 0) { lost[b] = (lost[b] || 0) + 1; if ((lostAt[b] || []).length < CAP) (lostAt[b] = lostAt[b] || []).push([x, y]); }
+      }
+    }
+    return { gained, lost, gainedAt, lostAt };
+  };
+
   P._goEvolve = function _goEvolve(mode = 0, events) {
     const bornThresh = mode === 3 ? 5 : 3;               // 拥挤突变 → 诞生阈值改 5
     // 步数：正常 1 步 / 寒潮 0 步 / 繁盛 2~3 步（FIX-6：用种子化 RNG 在 2/3 间选，
@@ -421,12 +443,20 @@ export function installGoMode(World) {
     if (mode === 1) steps = this._rng() < 0.5 ? 2 : 3;   // 繁盛：2 或 3 步
     else if (mode === 2) steps = 0;                      // 寒潮：暂停演化
     else steps = 1;                                      // 正常
+    // 演化前保留引用（_goEvolveOnce 会整体替换为新数组，旧数组不会被就地改写）
+    const before = this._life;
     if (steps === 0) {
-      if (events) events.push({ type: 'go_evolve', mode, steps: 0 });
+      const g0 = this._goInit();
+      g0.lastEvolve = { mode, steps: 0, gained: {}, lost: {}, gainedAt: {}, lostAt: {} };
+      if (events) events.push({ type: 'go_evolve', mode, steps: 0, diff: g0.lastEvolve });
       return;
     }
     for (let s = 0; s < steps; s++) this._goEvolveOnce(bornThresh);
-    if (events) events.push({ type: 'go_evolve', mode, steps });
+    // 因果可见化：把"这一拍演化让你多了什么、丢了什么"算出来并随事件下发
+    const diff = this._goEvolveDiff(before, this._life);
+    const g = this._goInit();
+    g.lastEvolve = { mode, steps, ...diff };
+    if (events) events.push({ type: 'go_evolve', mode, steps, diff: g.lastEvolve });
   };
 
   /**
@@ -1172,6 +1202,8 @@ export function installGoMode(World) {
       nextBreathIn: (World.GO_BREATH_EVERY - ((g.moveNo - 1) % World.GO_BREATH_EVERY)) % World.GO_BREATH_EVERY,
       event: g.lastEvent || 'calm',
       ko: g.ko,
+      // 上一拍演化的得失归因（供前端"看得见的因果"展示；重连后仍可读到）
+      lastEvolve: g.lastEvolve || null,
       // 旧口径（Voronoi 归属目数 + 图案奖）：保留不动，rts-go 快照与旧代码仍可读
       territory: sc ? { byF: sc.byF, black: sc.black, white: sc.white, ranked: sc.ranked } : null,
       // 新口径：中国规则数子（子数 + 围住空点）——终局胜负依据，供结算面板展示

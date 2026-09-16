@@ -84,6 +84,33 @@ test('GM-03b 批处理部分自杀：同批中某颗成无气团、另一颗有�
   assert.equal(L[10][10], 0, '同批另一颗也应随整批回滚');
 });
 
+test('GM-03c 演化归因：孤立子被淘汰 → go_evolve 事件 diff.lost 反映损失', () => {
+  const { w } = seated();
+  const L = w._life;
+  const B = fB(w);
+  L[5][5] = B;                      // 孤立一子，8 邻为空 → 演化后死亡
+  const evts = [];
+  w._goEvolve(0, evts);
+  // 注意：_goEvolveOnce 会整体替换 this._life，此前持有的 L 会变陈旧 → 必须重读
+  assert.equal(w._life[5][5], 0, '孤立子应被演化淘汰');
+  const ev = evts.find(e => e.type === 'go_evolve');
+  assert.ok(ev, '应下发 go_evolve 事件');
+  assert.equal(ev.diff.lost[B], 1, '黑方应记录损失 1 子');
+});
+
+test('GM-03d 演化归因：三子围空点诞生 → diff.gained 反映新增', () => {
+  const { w } = seated();
+  const L = w._life;
+  const B = fB(w);
+  L[5][5] = B; L[6][5] = B; L[5][6] = B;   // L 形三子，(6,6) 为空且 8 邻恰好 3 个
+  const evts = [];
+  w._goEvolve(0, evts);
+  // 同上：演化后必须重读 w._life
+  assert.equal(w._life[6][6], B, '(6,6) 应诞生黑子');
+  const ev = evts.find(e => e.type === 'go_evolve');
+  assert.equal(ev.diff.gained[B], 1, '黑方应记录新增 1 子');
+});
+
 test('GM-04 有气可落：紧邻敌子但自身有气 → ok', () => {
   const { w } = seated();
   const L = w._life;
