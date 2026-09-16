@@ -3,6 +3,7 @@ import { WebSocketServer } from 'ws';
 import { verifyToken, isBanActive } from './auth.js';
 import { usersRepo } from './db/index.js';
 import { activeWorlds } from './worldhub.js';
+import { roomHub } from './rooms.js';
 import { IntentQueue } from './intents.js';
 
 // M1 单一 tick 归属：记录"由 WS 循环驱动"的 worldId。
@@ -233,43 +234,25 @@ export function attachWS(httpServer) {
           if (!authed || !worldId) { err(ERR.BAD_AUTH, 'not_authed'); return; }
           const intent = msg.data || {};
           const w = activeWorlds.get(worldId);
-          // 未点「开始游戏」前拒绝一切玩家 intent（落子/移动）。AI（stepAI / _goMaybeAIMove）
-          // 不经过本 WS intent 路径，故不受影响；重连（HELLO/JOIN）与观察（CHAT）也不在此拦截。
-          if (w && !w.started) { err(ERR.FORBIDDEN, 'not_started'); return; }
-          // go 模式：不走 intentQueue/20TPS tick，直接调用 applyGoIntent（go 没有常规 tick）。
-          if (w && w.mode === 'go') {
-            if (intent.go && typeof intent.go === 'object') {
-              const events = [];
-              try {
-                const r = w.applyGoIntent(authed.userId, intent.go, events);
-                // FIX-3(b)：落子被拒时补一个 go_reject 事件（附 lx/ly/reason/playerId），
-                // 供客户端在该点留红叉并提示原因。**只加事件，不改 applyGoIntent 的返回值语义**。
-                if (!r.ok && r.reason) {
-                  err(ERR.BAD_INTENT, String(r.reason));
-                  const rg = intent.go || {};
-                  // 兼容两种落子格式：{lx,ly}（单颗）与 {moves:[{lx,ly},...]}（一批）。
-                  // 对整批被拒时，逐个合法坐标点补 go_reject，便于客户端在这些点上留红叉。
-                  const pts = Array.isArray(rg.moves)
-                    ? rg.moves.filter(m => m && typeof m.lx === 'number' && typeof m.ly === 'number')
-                    : (typeof rg.lx === 'number' && typeof rg.ly === 'number' ? [{ lx: rg.lx, ly: rg.ly }] : []);
-                  if (r.reason !== 'oob') {
-                    for (const p of pts) {
-                      events.push({
-                        type: 'go_reject', reason: String(r.reason),
-                        lx: p.lx | 0, ly: p.ly | 0, playerId: authed.userId,
-                      });
-                    }
-                  }
-                }
-              } catch (e) {
-                err(ERR.BAD_INTENT, 'go_intent_failed');
-              }
+          // 世界默认开局暂停（POST /rooms/:code/world 设 w.paused=true），
+          // 故"未开始不可动"由现有房主暂停机制统一处理：rts 不 tick、go 落子在 applyGoIntent 内拦截。
+          // 此处不再额外按 started 拦截（先前那版属于过度改动）。
+          // 模式意图路由：由注册表里的模式插件决定如何处理本意图。
+          // go：直接 applyGoIntent（绕过 20TPS intentQueue），落子被拒的 go_reject 事件由插件压入 events；
+          // rts 无 routeIntent → 落到底部入队逻辑（20TPS 常规路径）。
+          if (w && w._mode && w._mode.routeIntent) {
+            const events = [];
+            const routed = w._mode.routeIntent(w, authed.userId, intent, events);
+            if (routed.handled) {
+              if (routed.silent) return;   // 插件声明"无需广播"（如 go 世界收到非 go 意图）
+              const r = routed.result || {};
+              if (!r.ok && r.reason) err(ERR.BAD_INTENT, String(r.reason));
               // 无论成功/被拒都广播最新快照（双方即时看到棋盘）
               broadcast(w);
               if (events.length) broadcastEvents(w, events);
               else broadcastEvents(w, w.events || []);
+              return;
             }
-            return;
           }
           // 校验 move
           if (intent.move) {
@@ -353,6 +336,14 @@ export function attachWS(httpServer) {
         // M3 断线宽限：不立刻 removePlayer。若该用户还有其它活连接（如双标签页）
         // 则无需宽限；否则保留角色与领土 GRACE_MS，供快速重连续用。
         if (!hasLiveSession(worldId, authed.userId)) {
+          // 大厅阶段：从 room.members 移除掉线者。members 只在 join 时 set、从不 delete，
+          // 若不在这里清，roomHasHuman 会一直误判"有人"→ 空房间永远清不掉（Bug 2 根因）。
+          for (const room of roomHub.values()) {
+            if (room.worldId === worldId && room.members && room.members.has(authed.userId)) {
+              room.members.delete(authed.userId);
+              break;
+            }
+          }
           if (!grace.has(worldId)) grace.set(worldId, new Map());
           grace.get(worldId).set(authed.userId, Date.now() + GRACE_MS);
         }
@@ -423,8 +414,8 @@ export function attachWS(httpServer) {
         continue;
       }
       netManaged.add(worldId);
-      // go 世界不参与 20 TPS tick（由下面的 1s 计时循环驱动），故不进入 tickList。
-      if (w.mode === 'go') continue;
+      // 非 realtime 模式（如 go / interval）不参与 20 TPS tick，由各自的 interval 循环驱动。
+      if (w._mode.tickDriver !== 'realtime') continue;
       tickList.push([worldId, queueMap, w]);
     }
 
@@ -473,12 +464,13 @@ export function attachWS(httpServer) {
   // 不阻止进程退出（测试环境 attachWS 后可自然结束；线上由 http server 保活）
   if (typeof netTicker.unref === 'function') netTicker.unref();
 
-  // go 模式：1 秒一次推进。计时暂停在 net 层判定（无任何 live WS 连接时冻结 turnTicks），
+  // interval 模式（go / gomoku / weiqi 等）：1 秒一次推进。计时暂停在 net 层判定（无任何 live WS 连接时冻结 turnTicks），
   // engine 不感知连接 —— 保持引擎纯函数式确定性。
-  // 顺序：AI 出手（若轮到 AI）→ 推进计时（可能超时 pass）→ 广播。
-  const goTicker = setInterval(() => {
+  // 顺序：模式自己决定（如 go：AI 出手 → 推进计时 → 广播）；主干只按注册表调用 intervalStep（回退 tick），
+  // 不再硬编码 go 专属方法 —— 新增 interval 模式零改动即可被驱动。
+  const intervalTicker = setInterval(() => {
     for (const w of activeWorlds.values()) {
-      if (w.mode !== 'go') continue;
+      if (w._mode.tickDriver !== 'interval') continue;   // 仅 interval 模式（go / gomoku / weiqi 等）走 1Hz 循环
       if (Object.keys(w.players).length === 0) continue;
       // 房主暂停：冻结计时与 AI（turnTicks 不推进，回来接着走）
       if (w.paused) continue;
@@ -487,15 +479,11 @@ export function attachWS(httpServer) {
       const events = [];
       let changed = false;
       try {
-        if (w._goMaybeAIMove(events)) changed = true;
-        // AI 若刚出手，本秒不再推进计时（把一整秒留给下一位行动方）
-        if (!changed) {
-          const r = w._goTick();
-          if (r.events && r.events.length) { for (const e of r.events) events.push(e); changed = true; }
-          else if (!r.events || r.events.length === 0) { /* 仅计时推进，仍需广播 msLeft */ changed = true; }
-        }
+        // 按注册表驱动 interval 的一步（含 AI）：优先 intervalStep，回退 tick。
+        const step = w._mode.intervalStep || w._mode.tick;
+        if (step) { const r = step(w, events); changed = !(r && r.changed === false); }
       } catch (e) {
-        console.error('[go-tick]', w.worldId, e);
+        console.error('[interval-tick]', w.worldId, e);
       }
       if (changed) {
         broadcast(w);
@@ -503,7 +491,7 @@ export function attachWS(httpServer) {
       }
     }
   }, 1000);
-  if (typeof goTicker.unref === 'function') goTicker.unref();
+  if (typeof intervalTicker.unref === 'function') intervalTicker.unref();
 
   return wss;
 }

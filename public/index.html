@@ -61,6 +61,10 @@
   #toast.show{opacity:1}
   #chatbox{position:absolute;bottom:8px;left:8px;right:8px;display:flex;gap:6px}
   #chatbox input{background:rgba(0,0,0,.5)}
+  /* 聊天记录区：叠在聊天输入框上方，半透明可滚动。默认 display:none，进房后由 openSocket 置 flex。 */
+  #chat-log{position:absolute;left:8px;right:8px;bottom:54px;max-height:180px;overflow-y:auto;display:none;flex-direction:column;gap:3px;font-size:12px;line-height:1.45;padding:8px 10px;background:rgba(0,0,0,.5);border:1px solid #30363d;border-radius:6px;pointer-events:auto;z-index:4}
+  #chat-log .c{padding:1px 0;color:#c9d1d9;word-break:break-word}
+  #chat-log .c b{color:#58a6ff;font-weight:600}
   .kbd{display:inline-block;padding:1px 6px;border:1px solid #30363d;border-radius:3px;font-size:10px;color:#8b949e;background:#0d1117}
   .help{font-size:11px;color:#8b949e;line-height:1.6}
   .help kbd{font-family:ui-monospace,Consolas,monospace}
@@ -98,6 +102,8 @@
         <select id="world-mode" title="模式" style="flex:1">
           <option value="rts">实时模式</option>
           <option value="go">回合制模式</option>
+          <option value="gomoku">五子棋</option>
+          <option value="weiqi">标准围棋</option>
         </select>
         <select id="room-max" title="席位数(含电脑)" style="flex:0 0 86px">
           <option value="1">1 人</option>
@@ -197,36 +203,36 @@
       <div class="stat"><span>状态</span><b id="room-phase">-</b></div>
       <div class="stat" id="room-count-row"><span>席位</span><b id="room-count">0/0</b></div>
       <div class="stat" id="room-slots-row"><span>人类/电脑</span><b id="room-slots">0H + 0AI</b></div>
-      <div class="stat" id="room-tick-row"><span>tick</span><b id="room-tick">0</b></div>
-      <div class="stat" id="tide-row"><span>潮汐</span><b id="tide-info">-</b></div>
-      <div class="stat" id="emergent-row"><span>涌现数</span><b id="room-emergent">0</b></div>
-      <div class="stat" id="room-lat-row"><span>机制</span><b id="room-lat">惯性</b></div>
-      <div class="stat" id="room-settings-row"><span>玩法设置</span><b id="room-settings-info" style="color:#ffd479">落子 3 颗/回合 · 死亡宽限 0 回合</b></div>
-      <div class="stat" id="victory-row"><span>胜利条件</span><b id="victory-info" style="color:#ffd479">领土</b></div>
-      <div class="row" id="victory-edit-row" style="margin-top:4px;display:none">
-        <button id="victory-edit" style="flex:1">编辑胜利条件（房主）</button>
-      </div>
-      <div class="stat" id="board-row"><span>棋盘形状</span><b id="board-info" style="color:#ffd479">矩形 32×32（默认）</b></div>
-      <div class="row" id="board-thumb-row" style="margin-top:4px;display:none">
-        <canvas id="board-thumb" width="120" height="120"
-                style="width:120px;height:120px;border:1px solid #30363d;border-radius:4px;background:#0d1117"></canvas>
-        <div id="board-thumb-legend" style="font-size:11px;color:#6e7681;margin-left:8px;line-height:1.6"></div>
-      </div>
-      <div class="row" id="board-edit-row" style="margin-top:4px;display:none">
-        <button id="board-edit" style="flex:1">编辑棋盘形状（房主）</button>
-      </div>
+      <details style="margin-top:6px">
+        <summary style="font-size:11px;color:#8b949e;cursor:pointer">房间详情（tick / 潮汐 / 涌现 / 玩法 / 胜利 / 棋盘）</summary>
+        <div class="stat" id="room-tick-row"><span>tick</span><b id="room-tick">0</b></div>
+        <div class="stat" id="tide-row"><span>潮汐</span><b id="tide-info">-</b></div>
+        <div class="stat" id="emergent-row"><span>涌现数</span><b id="room-emergent">0</b></div>
+        <div class="stat" id="room-lat-row"><span>机制</span><b id="room-lat">惯性</b></div>
+        <div class="stat" id="room-settings-row"><span>玩法设置</span><b id="room-settings-info" style="color:#ffd479">落子 3 颗/回合 · 死亡宽限 0 回合</b></div>
+        <div class="stat" id="victory-row"><span>胜利条件</span><b id="victory-info" style="color:#ffd479">领土</b></div>
+        <div class="row" id="victory-edit-row" style="margin-top:4px;display:none">
+          <button id="victory-edit" style="flex:1">编辑胜利条件（房主）</button>
+        </div>
+        <div class="stat" id="board-row"><span>棋盘形状</span><b id="board-info" style="color:#ffd479">矩形 32×32（默认）</b></div>
+        <div class="row" id="board-thumb-row" style="margin-top:4px;display:none">
+          <canvas id="board-thumb" width="120" height="120"
+                  style="width:120px;height:120px;border:1px solid #30363d;border-radius:4px;background:#0d1117"></canvas>
+          <div id="board-thumb-legend" style="font-size:11px;color:#6e7681;margin-left:8px;line-height:1.6"></div>
+        </div>
+        <div class="row" id="board-edit-row" style="margin-top:4px;display:none">
+          <button id="board-edit" style="flex:1">编辑棋盘形状（房主）</button>
+        </div>
+      </details>
       <div class="row" id="lobby-build-row" style="margin-top:6px;display:none">
         <button id="lobby-build" class="primary" style="flex:1">建立世界（房主）</button>
-      </div>
-      <div class="row" id="lobby-start-row" style="margin-top:6px;display:none">
-        <button id="lobby-start" class="primary" style="flex:1">开始游戏（房主）</button>
       </div>
       <div class="row" style="margin-top:6px">
         <button id="lobby-add-ai" style="flex:1">+ 电脑玩家</button>
         <button id="lobby-remove-ai" style="flex:1">− 电脑玩家</button>
       </div>
       <div class="row" style="margin-top:6px">
-        <button id="lobby-pause" style="flex:1">暂停(房主)</button>
+        <button id="lobby-pause" class="primary" style="flex:1">开始游戏（房主）</button>
         <button id="lobby-save" style="flex:1">存档</button>
       </div>
       <div class="row" style="margin-top:6px">
@@ -293,6 +299,6 @@
   </div>
 </div>
 
-<script type="module" src="./client.js?v=20260915a"></script>
+<script type="module" src="./client.js?v=20260916e"></script>
 </body>
 </html>

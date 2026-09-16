@@ -159,7 +159,7 @@ async function main() {
       n++;
       for (const w of activeWorlds.values()) {
         if (netManaged.has(w.worldId)) continue;
-        if (w.mode === 'go') continue;   // go 世界由 1s 计时循环驱动，不走 20 TPS
+        if (w._mode.tickDriver !== 'realtime') continue;   // 非 realtime 模式（go 等）由 1s 计时循环驱动
         if (w.paused) continue;          // 房主暂停
         if (Object.keys(w.players).length === 0) continue;
         try { w.tickOnce(); } catch (e) { console.error('[tick]', w.worldId, e); }
@@ -167,19 +167,21 @@ async function main() {
     }
   }, SAMPLE_MS);
 
-  // go 模式：无人连接的 go 世界（纯 AI 自对弈 / 等待连接）仍按 1s 推进。
+  // interval 模式（go / gomoku / weiqi 等）：无人连接的世界（纯 AI 自对弈 / 等待连接）仍按 1s 推进。
   // 有 live WS 时由 net.js 的 1s 循环接管（避免双驱动）；这里只处理未被 net 管理的世界。
+  // 主干只按注册表调用 intervalStep（回退 tick），不再硬编码 go 专属方法。
   setInterval(() => {
     for (const w of activeWorlds.values()) {
-      if (w.mode !== 'go') continue;
+      if (w._mode.tickDriver !== 'interval') continue;   // 仅 interval 模式（go / gomoku / weiqi 等）走 1Hz 循环
       if (netManaged.has(w.worldId)) continue;
       if (w.paused) continue;          // 房主暂停
       if (Object.keys(w.players).length === 0) continue;
       const events = [];
       try {
-        if (w._goMaybeAIMove(events)) { /* AI 已出手 */ }
-        else w._goTick();
-      } catch (e) { console.error('[go-tick]', w.worldId, e); }
+        // 按注册表驱动 interval 的一步（含 AI）：优先 intervalStep，回退 tick。
+        const step = w._mode.intervalStep || w._mode.tick;
+        if (step) step(w, events);
+      } catch (e) { console.error('[interval-tick]', w.worldId, e); }
     }
   }, 1000);
 

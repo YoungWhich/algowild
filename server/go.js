@@ -999,6 +999,9 @@ export function installGoMode(World) {
   P.applyGoIntent = function applyGoIntent(playerId, data, events) {
     const g = this._goSyncSeats();
     const evts = events || [];
+    // 房主暂停（含"开局默认暂停"）：冻结一切落子。go 落子是即时应用、不走 tick，
+    // 故需在此单独拦截；与 rts 的 paused 冻结同源，不新增 flag。
+    if (this.paused) return { ok: false, reason: 'paused' };
     if (g.result) return { ok: false, reason: 'ended' };
     if (!data || typeof data !== 'object') return { ok: false, reason: 'bad_move' };
     const seatIdx = (g.seats || []).indexOf(playerId);

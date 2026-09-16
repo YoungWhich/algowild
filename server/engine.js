@@ -6,7 +6,7 @@ import {
 import { IntentQueue, applyImpulse, elasticCollision } from './intents.js';
 import { recognizeEmergent, tickEmergent, SAFE_SPAWN_DIST } from './emergent.js';
 import { stepAI, makeAIPlayer, registerGoAI } from './ai.js';
-import { installGoMode } from './go.js';
+import { getMode, allModeDefs, boardMaxForMode } from './modes/index.js';
 
 // 内核加载器
 const kernelRegistry = new Map();
@@ -41,6 +41,9 @@ export class World {
     // 模式：'rts'（默认，行为逐字节不变）| 'go'（回合制 · 演化棋）。
     // go 模式走独立分支：不参与 20 TPS tick、无地形资源、固定 2 座位。
     this.mode = (opts && opts.mode) || 'rts';
+    // 模式插件（注册表）：主干通过 this._mode 读取 tickDriver / boardMax / 钩子，不再硬编码 mode 分支。
+    // 新增模式 = 在 server/modes/ 放一个插件文件（+ 在注册表加一行 import），engine/net/index 零改动。
+    this._mode = getMode(this.mode);
     // 生命层边长（正方形）：rts 恒 32（1 生命格 = 6x6 世界格）；go 跟随棋盘尺寸（_compileBoard 里设定）。
     this.lifeW = World.LIFE_W;
     this.go = null;                 // go 模式状态容器（惰性 _goInit）
@@ -204,18 +207,10 @@ export class World {
     };
     // 开局=城邦起跑：跳过部落/村落的空转期，直接进入可争夺的棋盘
     World._stampStartEra(p);
-    // go 模式：空盘开局，跳过 _seedOnboarding（不生成出生点资源）
-    if (this.mode === 'go') {
-      this._lifeInit();
-      this.players[playerId] = p;
-      p.goTimeouts = 0;
-      p.seeds = 0;
-      p.goPassed = false;
-      this._goSeatJoin(p);
-      // 房子未指定房主时，第一个进来的人就是房主
-      if (this.hostId == null) this.hostId = playerId;
-      return p;
-    }
+    // 模式钩子：go 等模式在此接管开局（空盘/就座/跳过 rts 出生点资源），
+    // rts 无钩子则走下方默认路径（落出生点 + 就座）。
+    const m = getMode(this.mode);
+    if (m.onAddPlayer) { m.onAddPlayer(this, p); return p; }
     this.players[playerId] = p;
     this._seedOnboarding(px, py, playerId);
     if (this.hostId == null) this.hostId = playerId;
@@ -239,12 +234,9 @@ export class World {
     if (!this.canAcceptHuman()) return { rejected: 'room_full' };
     const ai = makeAIPlayer(this, this._rng);
     if (!ai) return { rejected: 'ai_spawn_failed' };
-    if (this.mode === 'go') {
-      ai.goTimeouts = 0; ai.seeds = 0; ai.goPassed = false;
-      this._goSeatJoin(ai);
-    } else {
-      World._stampStartEra(ai);
-    }
+    const m = getMode(this.mode);
+    if (m.onAddAI) m.onAddAI(this, ai);
+    else World._stampStartEra(ai);
     return ai;
   }
   /** 移除一个电脑玩家（房主操作）。人类玩家不会被此方法移除。 */
@@ -311,10 +303,10 @@ export class World {
   tickOnce() {
     // 房主暂停：两种模式的时钟都不推进（但连接/心跳不受影响，随时可恢复）。
     if (this.paused) return { events: [], paused: true, tickMs: 0 };
-    // go 模式：不跑 20 TPS 主循环，改由 net/index 的 1s 循环调用 _goTick。
-    // 这里做一层防御转发（若误把 go 世界塞进常规 tick 路径，仍能正确推进），
-    // rts 路径完全不受影响。
-    if (this.mode === 'go') return this._goTick();
+    // 模式钩子：由注册表决定本世界的模拟驱动方式。
+    // rts = 内置 9 阶段 tick（下方默认路径）；go/其它 interval 模式 = 由 net/index 的 1s 循环调用其 tick 钩子。
+    const m = getMode(this.mode);
+    if (m.tick) return m.tick(this, this.events);
     const t0 = Date.now();
     this.tick++;
     this.dailyTick++;
@@ -771,8 +763,7 @@ export class World {
    * @returns {string[]}
    */
   static availableLines(mode) {
-    const list = World.VICTORY_AVAILABLE[mode] || World.VICTORY_AVAILABLE.rts;
-    return list.slice();
+    return getMode(mode).availableVictoryLines.slice();
   }
   /**
    * 胜利线归一：非对象/非法 JSON → 默认；逐键仅接受 boolean；go 下强制关闭不可用线（防越权）。
@@ -787,8 +778,8 @@ export class World {
     if (o && typeof o === 'object') {
       for (const k of World.VICTORY_LINE_KEYS) if (typeof o[k] === 'boolean') out[k] = o[k];
     }
-    // 模式门禁：go 只允许 territory。
-    const allow = World.VICTORY_AVAILABLE[mode] || World.VICTORY_AVAILABLE.rts;
+    // 模式门禁：非本模式可用胜利线强制关闭（如 go 只允许 territory）。
+    const allow = getMode(mode).availableVictoryLines;
     for (const k of World.VICTORY_LINE_KEYS) if (!allow.includes(k)) out[k] = false;
     return out;
   }
@@ -876,8 +867,8 @@ export class World {
     let o = v;
     if (typeof o === 'string') { try { o = JSON.parse(o); } catch (e) { return null; } }
     if (!o || typeof o !== 'object') return null;                    // E1/E12：无 shape → 默认矩形
-    // 尺寸上限：go 棋盘即棋盘 → 100；rts 生命层恒 32×32，棋盘只做遮罩 → 32。
-    const maxN = (mode === 'rts') ? World.LIFE_W : World.BOARD_MAX;
+    // 尺寸上限：由模式插件决定（rts 生命层恒 32；go 棋盘即棋盘 → 100；未指定 → 宽松 100）。
+    const maxN = boardMaxForMode(mode);
     const w = World._clampInt(o.w, 0, World.BOARD_MIN, maxN);
     const h = World._clampInt(o.h, 0, World.BOARD_MIN, maxN);
     if (!Number.isInteger(w) || !Number.isInteger(h) || w < World.BOARD_MIN || h < World.BOARD_MIN) return null;
@@ -1115,7 +1106,7 @@ export class World {
     // 棋盘 ≤32 时保持 32×32（超出棋盘的部分由 World.isWall 判为墙，行为与改造前逐字节一致）；
     // 棋盘 >32 时扩容到棋盘尺寸，使 100×100 等大盘真正可用（此前会因坐标越界崩溃）。
     // rts 恒 32（1 生命格 = 6×6 世界格，棋盘只做遮罩），且 rts 棋盘已被 normBoard 限到 ≤32。
-    this._setLifeW(this.mode === 'go' ? Math.max(World.LIFE_W, cfg.w, cfg.h) : World.LIFE_W, true);
+    this._setLifeW(getMode(this.mode).growLifeLayer ? Math.max(World.LIFE_W, cfg.w, cfg.h) : World.LIFE_W, true);
   }
   /**
    * 设定生命层边长（内部）。若已有生命层且尺寸变化 → 置空触发 _lifeInit 重分配
@@ -1816,7 +1807,8 @@ export class World {
     // ⚠️ 顺序关键：go 快照会把「就近归属」网格写回 _lifeOwner（让底色与数子同口径），
     //    而 lifeOwner 在下面**较早**就被序列化 —— 因此必须在构造返回对象前先算一次 go 状态，
     //    否则序列化到的是旧的 Voronoi 底色（地图颜色会与结算对不上）。
-    const goState = this.mode === 'go' ? this._goSnapshotState() : null;
+    const m = getMode(this.mode);
+    const modeState = m.snapshot ? m.snapshot(this) : null;
     return {
       worldId: this.worldId,
       tick: this.tick,
@@ -1888,7 +1880,7 @@ export class World {
       lastTickedAt: this.lastTickedAt,
       // go 模式专属字段（rts 下为 null，零开销）。复用同一批 lifeGrid / lifeOwner /
       // lifeOwners / regionFaction 字段，客户端零改动即可显示棋子与势力底色。
-      go: goState,
+      go: modeState,
       // ---- 世界可见性：地形与资源点 ----
       // 之前只发 terrainSum/resourcesCount 两个数字，客户端根本画不出世界
       // （玩家看不见资源 → 不知道要干什么）。地形静态：低频重发；资源稀疏 + 每秒重算。
@@ -1948,8 +1940,10 @@ function valueNoise(x, y, seed) {
 
 export { loadKernels, kernelRegistry };
 
-// 把 go 模式方法族挂到 World.prototype（mixin，避免与 go.js 形成循环依赖）。
-// rts 路径不触碰任何 go 方法，行为逐字节不变。
-installGoMode(World);
+// 把各模式插件的方法族挂到 World.prototype（mixin）。每个插件的 install 钩子负责自己的挂载，
+// 主干不感知具体模式 —— 新增模式只需在 server/modes/ 放一个插件文件，无需改动此处。
+for (const def of allModeDefs()) {
+  try { if (def.install) def.install(World); } catch (e) { console.error('[modes] install failed:', def.id, e); }
+}
 // go 模式 AI 决策入口（避免 engine ↔ go 循环依赖，挂在 World 上）。
 registerGoAI(World);

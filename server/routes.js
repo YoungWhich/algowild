@@ -14,6 +14,7 @@ import {
   verifyRoomPass, roomHub, MAX_PLAYERS, normStonesPerTurn, normLonelyDeathDelay,
   normVictoryLines, normVictoryThresholds, normBoard, normGoLimits, setRoomSettings,
 } from './rooms.js';
+import { normalizeMode } from './modes/index.js';
 import {
   getInactiveDays, setInactiveDays, previewInactive, runInactivePurge, lastPurgeAt,
   DEFAULT_INACTIVE_DAYS, MAX_INACTIVE_DAYS,
@@ -235,8 +236,8 @@ export function createRouter() {
     if (!name || typeof name !== 'string') return res.json({ code: 400, message: 'name_required', data: null });
     const id = crypto.randomBytes(8).toString('hex');
     const sd = Number.isInteger(seed) ? seed : (Math.random() * 1e9) | 0;
-    // 模式：'rts'（默认，行为逐字节不变）| 'go'（回合制 · 演化棋）。
-    const md = mode === 'go' ? 'go' : 'rts';
+    // 模式：归一为已注册模式 id（默认 'rts'；'go' / 未来 gomoku 等由注册表决定，无需改此处）。
+    const md = normalizeMode(mode);
     worldsRepo.create(id, req.user.id, name, sd);
     const stonesPerTurn = normStonesPerTurn(b.stonesPerTurn);
     const lonelyDeathDelay = normLonelyDeathDelay(b.lonelyDeathDelay);
@@ -411,8 +412,8 @@ export function createRouter() {
       if (w0) return res.json({ code: 0, message: 'ok', data: { worldId: room.worldId, mode: w0.mode, room: roomInfo(room, req.user.id) } });
     }
     const b = req.body || {};
-    const md = (b.mode === 'go' || room.mode === 'go') ? 'go'
-      : (b.mode === 'rts' || room.mode === 'rts') ? 'rts' : 'rts';
+    // 模式优先级：请求体显式指定 > 房间已设模式 > 'rts'。三者均为注册表归一后的模式 id。
+    const md = normalizeMode(b.mode, null) || normalizeMode(room.mode, null) || 'rts';
     const id = crypto.randomBytes(8).toString('hex');
     const sd = Number.isInteger(b.seed) ? b.seed : (Math.random() * 1e9) | 0;
     worldsRepo.create(id, req.user.id, String(b.name || room.name).slice(0, 32), sd);
@@ -430,6 +431,10 @@ export function createRouter() {
     });
     activeWorlds.set(id, w);
     attachWorld(room, id, md);
+    // 开局默认暂停：世界建立后冻结，房主点「开始游戏」再取消暂停。
+    // 这样"未开始不可动"用现成的房主暂停机制实现（rts 不 tick、go 落子被拦），
+    // 而不是新加 started 拦截。构造器默认 paused=false 不变，单元测试 new World() 不受影响。
+    w.paused = true;
     // 大厅里已经等待的成员，一次性带到新世界
     for (const [uid, info] of room.members) {
       if (!w.players[uid]) w.addPlayer(uid, (info && info.name) || ('玩家' + uid));
@@ -448,6 +453,7 @@ export function createRouter() {
     if (!w) return res.json({ code: 4004, message: 'world_not_ready', data: null });
     if (w.hostId !== req.user.id) return res.json({ code: 403, message: 'not_host', data: null });
     w.started = true;
+    w.paused = false;        // 开始游戏 = 解冻（世界默认 paused=true，不取消暂停的话点了开始也冻着）
     return res.json({ code: 0, message: 'ok', data: { room: roomInfo(room, req.user.id) } });
   });
 

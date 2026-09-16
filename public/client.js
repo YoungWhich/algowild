@@ -2,6 +2,12 @@
 // 设计：登录 → 建世界/加入房间 → Canvas 渲染
 // 铁律：延迟 = 惯性（服务器按到达顺序 FIFO 处理意图，客户端不模拟、不补偿延迟）
 
+// 模式注册表（前端）：把 `mode === 'go'` 字符串比较收敛为查表。新增模式见 docs/MODES.md。
+import { isGo as _isGoMode, boardMaxForMode as _modeBoardMax, boardDefaultForMode as _modeBoardDefault, normalizeMode as _modeNormalize, isIntervalMode as _isIntervalMode, getMode as _modeGet } from './modes/index.js';
+// 棋盘类模式（gomoku / weiqi）的渲染 / 输入 / HUD 入口：依赖注入工厂，自包含、不反向依赖本文件。
+import { createGomokuView } from './modes/gomoku.js';
+import { createWeiqiView } from './modes/weiqi.js';
+
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d');
 
@@ -31,7 +37,7 @@ const state = {
   seenBriefing: false, // 是否已看过 rts 任务简报
   seenGoBriefing: false, // 是否已看过 go 模式简报（FIX-1）
   _briefedFor: false,  // FIX-1：首个 snap 到达后是否已按模式分流弹过简报（只弹一次）
-  mode: 'rts',         // 当前模式：'rts' | 'go'（go=回合制 · 演化棋）
+  mode: 'rts',         // 当前模式：'rts' | 'go' | 'gomoku' | 'weiqi' …（注册表 id；权威以 snapshot.mode 为准）
   goEvent: 'calm',     // go 模式最近一次世界事件
   _goResultShown: false, // 终局面板是否已弹（防重复）
   _goReject: null,     // FIX-3(b)：非法落子留痕 {lx,ly,born}
@@ -163,7 +169,8 @@ $('auth-go').onclick = async () => {
 
 function roomOpts() {
   const mp = parseInt(($('room-max') && $('room-max').value) || '4', 10);
-  const mode = ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts';
+  // 模式 id 走注册表归一（rts / go / gomoku / weiqi …），避免硬编码具体模式名（否则选五子棋会被按 rts 建房）。
+  const mode = _modeNormalize($('world-mode') ? $('world-mode').value : 'rts');
   return {
     name: ($('room-name') && $('room-name').value.trim()) || undefined,
     maxPlayers: Number.isFinite(mp) ? Math.max(1, Math.min(8, mp)) : 4,
@@ -184,8 +191,8 @@ function roomOpts() {
 }
 // 回合制限制：从建房弹窗读取（秒 → 毫秒）；非回合制模式返回 undefined（不落库，走服务端默认）。
 function collectGoLimits() {
-  const mode = ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts';
-  if (mode !== 'go') return undefined;
+  const mode = _modeNormalize($('world-mode') ? $('world-mode').value : 'rts');
+  if (mode !== 'go') return undefined;   // 回合制限制仅 go 支持（gomoku / weiqi → undefined）
   return {
     maxMoves: clampInt($('golimits-moves') && $('golimits-moves').value, 20, 600, 150),
     turnMs: clampInt($('golimits-turn') && $('golimits-turn').value, 5, 300, 30) * 1000,
@@ -235,11 +242,17 @@ const BOARD_COLOR = {
   2: '#f85149',   // 虚空（墙）
 };
 
-// 尺寸上限：rts 生命层恒 32（棋盘只做遮罩）；go 棋盘即棋盘 → 100。
+// 尺寸上限：路由到前端模式注册表（rts 32 / go 100 / gomoku 15 / weiqi 19；未指定 → 宽松 100）。
 function boardMaxForMode(mode) {
-  // go：棋盘即棋盘（生命层随棋盘尺寸）→ 上限 100，与后端 World.BOARD_MAX 一致。
-  // rts：生命层恒 32×32（1 生命格 = 6×6 世界格），棋盘只做遮罩 → 上限 32。
-  return (mode === 'rts') ? 32 : 100;
+  return _modeBoardMax(mode);
+}
+// 尺寸默认值：路由到前端模式注册表（rts 32 / go 32 / gomoku 15 / weiqi 19；未指定 → 32）。
+function boardDefaultForMode(mode) {
+  return _modeBoardDefault(mode);
+}
+// 模式显示名（房间列表 / 棋盘文案用；未知 → rts）。
+function modeLabel(mode) {
+  return _modeGet(mode).label;
 }
 
 // 位图 → 紧凑序列化串（行优先，'/' 分行）。
@@ -409,11 +422,11 @@ class BoardEditor {
   constructor(canvas, mode, opts) {
     this.cv = canvas;
     this.ctx = canvas.getContext('2d');
-    this.mode = mode === 'go' ? 'go' : 'rts';
+    this.mode = _modeNormalize(mode);
     this.max = boardMaxForMode(this.mode);
     this.onChange = (opts && opts.onChange) || null;
-    // 默认尺寸：rts / go 都是 32（rts 生命层上限即 32；go 可再调到 100）。
-    const defN = this.mode === 'rts' ? 32 : 32;
+    // 默认尺寸按模式取（rts 32 / go 32 / gomoku 15 / weiqi 19；未知 → 32）。
+    const defN = boardDefaultForMode(this.mode);
     this.board = null;              // null = 默认矩形
     this.w = defN;
     this.h = defN;
@@ -529,7 +542,7 @@ class BoardEditor {
   }
   // 载入一个已归一棋盘（用于房内编辑已有形状）。
   load(raw, mode) {
-    if (mode) { this.mode = mode === 'go' ? 'go' : 'rts'; this.max = boardMaxForMode(this.mode); }
+    if (mode) { this.mode = _modeNormalize(mode); this.max = boardMaxForMode(this.mode); }
     const b = normBoardClient(raw);
     if (!b) { this.board = null; this.shape = new Uint8Array(this.w * this.h).fill(BOARD_PLAY); }
     else { this.board = b; this.w = b.w; this.h = b.h; this.shape = b.shape.slice(); }
@@ -544,7 +557,7 @@ class BoardEditor {
   // 当前是否等于默认矩形（全可落子）。注意：这里默认矩形指"当前 w×h 全可落子"，
   // 但因为 null 语义是模式默认尺寸，只有当 w/h 等于模式默认尺寸时才等价 null。
   _isDefaultRect() {
-    const defN = 32; // 前端 null 的示意默认边长（两种模式默认棋盘都是 32）
+    const defN = boardDefaultForMode(this.mode); // 前端 null 的示意默认边长（rts/go 32 · gomoku 15 · weiqi 19）
     if (this.w !== defN || this.h !== defN) return false;
     for (let i = 0; i < this.shape.length; i++) if (this.shape[i] !== BOARD_PLAY) return false;
     return true;
@@ -586,7 +599,7 @@ function drawBoardThumb(canvas, rawBoard, mode) {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const b = normBoardClient(rawBoard);
-  const defN = (mode === 'go') ? 32 : 32;
+  const defN = boardDefaultForMode(mode);
   const w = b ? b.w : defN, h = b ? b.h : defN;
   canvas.width = w; canvas.height = h;
   ctx.clearRect(0, 0, w, h);
@@ -602,7 +615,7 @@ function drawBoardThumb(canvas, rawBoard, mode) {
 // 棋盘形状文本（HUD / 房间展示）。
 function boardInfoText(rawBoard, mode) {
   const b = normBoardClient(rawBoard);
-  if (!b) return (mode === 'go' ? '回合制' : '实时') + ' 默认矩形';
+  if (!b) return (mode === 'rts' ? '实时' : modeLabel(mode)) + ' 默认矩形';
   let play = 0, voidN = 0;
   for (let i = 0; i < b.shape.length; i++) {
     if (b.shape[i] === BOARD_PLAY) play++; else if (b.shape[i] === BOARD_VOID) voidN++;
@@ -616,14 +629,38 @@ const VICTORY_LINE_KEYS = ['territory', 'economy', 'singularity', 'survival'];
 const VICTORY_AVAILABLE = {
   rts: ['territory', 'economy', 'singularity', 'survival'],
   go: ['territory'],
+  gomoku: ['territory'],
+  weiqi: ['territory'],
 };
 const VICTORY_LINE_DEFAULT = { territory: true, economy: false, singularity: false, survival: false };
 const VICTORY_LABEL = {
-  territory: { rts: '领土', go: '领土', descRts: '占满地图 16 区且进入帝国时代 → 胜', descGo: '双方停手后数子（子数 + 归属空点），多者胜' },
+  // 每行按模式给"显示名 / 说明"：rts/go 保持原样（逐字节不变）；
+  // gomoku/weiqi 用各自规则的文案（可用胜利线本身仍只有 territory，仅改文案）。
+  territory: {
+    rts: '领土', go: '领土', gomoku: '五连即胜', weiqi: '数子定胜负',
+    descRts: '占满地图 16 区且进入帝国时代 → 胜',
+    descGo: '双方停手后数子（子数 + 归属空点），多者胜',
+    descGomoku: '横 / 竖 / 斜连成 5 子（含 5 子以上）即胜；盘满无五连 → 平局',
+    descWeiqi: '中国规则数子（子数 + 围住空点）+ 贴目 7.5 定胜负（双方连续停手后数子）',
+  },
   economy: { rts: '经济', descRts: '领先 600 分并保持 90 秒 → 胜', descGo: '' },
   singularity: { rts: '采集', descRts: '六种资源各存满 30 → 胜', descGo: '' },
   survival: { rts: '灭族', descRts: '对手全部出局 → 胜', descGo: '' },
 };
+// 胜利条件的"显示名"：优先取该模式的专属文案，否则回退 rts（rts/go 逐字节不变）。
+function victoryLineLabel(k, mode) {
+  const lab = VICTORY_LABEL[k];
+  if (!lab) return k;
+  return lab[mode] || lab.rts || k;
+}
+// 胜利条件的"说明文案"：按模式选择 descGo/descGomoku/descWeiqi，缺省回退 descRts。
+function victoryLineDesc(k, mode) {
+  const lab = VICTORY_LABEL[k] || {};
+  if (mode === 'go') return lab.descGo || lab.descRts || '';
+  if (mode === 'gomoku') return lab.descGomoku || lab.descRts || '';
+  if (mode === 'weiqi') return lab.descWeiqi || lab.descRts || '';
+  return lab.descRts || '';
+}
 function availableVictoryLines(mode) { return VICTORY_AVAILABLE[mode] || VICTORY_AVAILABLE.rts; }
 // 读取某模式下"胜利条件"勾选区当前状态（容器 id + 模式）。
 function collectVictoryLines(containerId, mode) {
@@ -659,11 +696,11 @@ function renderVictoryLines(containerId, mode, value, editable) {
   const v = normVictoryLinesClient(value, mode);
   const allow = availableVictoryLines(mode);
   box.innerHTML = allow.map(k => {
-    const lab = VICTORY_LABEL[k] || { rts: k };
-    const desc = mode === 'go' ? (lab.descGo || lab.descRts || '') : (lab.descRts || '');
+    const name = victoryLineLabel(k, mode);
+    const desc = victoryLineDesc(k, mode);
     const cb = `<input type="checkbox" data-line="${k}" ${v[k] ? 'checked' : ''} ${editable ? '' : 'disabled'}>`;
     return `<label style="display:flex;gap:6px;align-items:center;padding:2px 0;cursor:${editable ? 'pointer' : 'default'}">`
-      + cb + `<span>${escapeHtml(lab.rts)}</span>`
+      + cb + `<span>${escapeHtml(name)}</span>`
       + `<span style="color:#6e7681;font-size:11px">${escapeHtml(desc)}</span></label>`;
   }).join('');
   // 关闭的线（如切到 go 后 economy）→ 给一行灰字提示
@@ -672,23 +709,24 @@ function renderVictoryLines(containerId, mode, value, editable) {
     box.innerHTML += `<div style="color:#6e7681;font-size:11px;margin-top:4px">回合制不支持「${dropped.map(k => VICTORY_LABEL[k].rts).join('、')}」，已取消勾选</div>`;
   }
 }
-// 胜利条件文本（HUD / 房间展示）：把 victoryLines 转成人类可读串。
+// 胜利条件文本（HUD / 房间展示）：把 victoryLines 转成人类可读串（按模式取显示名）。
 function victoryLinesText(lines, mode) {
   const v = normVictoryLinesClient(lines || VICTORY_LINE_DEFAULT, mode);
-  const names = availableVictoryLines(mode).filter(k => v[k]).map(k => VICTORY_LABEL[k].rts);
+  const names = availableVictoryLines(mode).filter(k => v[k]).map(k => victoryLineLabel(k, mode));
   if (!names.length) return '无（本局仅计时/手动结束）';
   return names.join(' · ');
 }
 // 模式切换时：重渲建房弹窗的胜利条件区（静默丢弃新模式不支持的项）
 function onModeChange() {
-  const mode = ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts';
-  const cur = collectVictoryLines('victory-lines-build-list', mode === 'go' ? 'rts' : 'go'); // 保留旧模式下的选择
+  // 模式 id 走注册表归一（rts / go / gomoku / weiqi …），避免硬编码具体模式名。
+  const mode = _modeNormalize($('world-mode') ? $('world-mode').value : 'rts');
+  const cur = collectVictoryLines('victory-lines-build-list', 'rts'); // 以 rts（最宽松）读原始勾选，保留跨模式选择
   renderVictoryLines('victory-lines-build-list', mode, cur, true);
-  // 棋盘尺寸上限随模式变化（rts 32 / go 100）→ 重建编辑器
+  // 棋盘尺寸上限随模式变化（rts 32 / go 100 / gomoku 15 / weiqi 19）→ 重建编辑器
   buildBoardEditor(mode);
   // 回合制限制区仅 go 模式显示
   const glBox = $('golimits-build-adv');
-  if (glBox) glBox.style.display = (mode === 'go') ? '' : 'none';
+  if (glBox) glBox.style.display = _isGoMode(mode) ? '' : 'none';
 }
 if ($('room-vis')) $('room-vis').onchange = () => {
   const priv = $('room-vis').value === 'private';
@@ -698,7 +736,7 @@ if ($('room-vis')) $('room-vis').onchange = () => {
 if ($('world-mode')) $('world-mode').onchange = () => onModeChange();
 // 首次渲染建房弹窗的胜利条件区（默认仅勾「领土」）
 if ($('victory-lines-build-list')) {
-  renderVictoryLines('victory-lines-build-list', ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts', VICTORY_LINE_DEFAULT, true);
+  renderVictoryLines('victory-lines-build-list', _modeNormalize($('world-mode') ? $('world-mode').value : 'rts'), VICTORY_LINE_DEFAULT, true);
 }
 
 // ============== 建房弹窗：棋盘形状编辑器（双入口之一） ==============
@@ -723,7 +761,7 @@ function refreshBoardBuildInfo(tplKey) {
 function buildBoardEditor(mode) {
   const canvas = $('board-build-canvas');
   if (!canvas) return;
-  const m = mode === 'go' ? 'go' : 'rts';
+  const m = _modeNormalize(mode);
   const prev = boardBuildEditor ? boardBuildEditor.getBoard() : null;
   boardBuildEditor = new BoardEditor(canvas, m, { onChange: () => refreshBoardBuildInfo() });
   if (prev) boardBuildEditor.load(prev, m);
@@ -752,7 +790,7 @@ function buildBoardEditor(mode) {
   if ($('board-build-rotate')) $('board-build-rotate').onclick = () => { if (!boardBuildEditor.rotate()) toast('旋转后超出尺寸上限'); refreshBoardBuildInfo(); };
   if ($('board-build-reset')) $('board-build-reset').onclick = () => { boardBuildEditor.reset(); refreshBoardBuildInfo('rect'); };
   if ($('board-build-default')) $('board-build-default').onclick = () => {
-    const m2 = m === 'rts' ? 32 : 32;
+    const m2 = boardDefaultForMode(m);   // 按模式取默认尺寸（rts/go 32 · gomoku 15 · weiqi 19）
     boardBuildEditor.setSize(m2, m2); refreshBoardBuildInfo('rect');
   };
   if ($('board-build-w')) $('board-build-w').onchange = () => { boardBuildEditor.setSize(parseInt($('board-build-w').value, 10), boardBuildEditor.h); refreshBoardBuildInfo(); };
@@ -761,11 +799,11 @@ function buildBoardEditor(mode) {
   if ($('board-build-brush')) { $('board-build-brush').style.borderColor = '#58a6ff'; $('board-build-brush').style.color = '#58a6ff'; }
 }
 if ($('board-build-canvas')) {
-  buildBoardEditor(($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts');
+  buildBoardEditor(_modeNormalize($('world-mode') ? $('world-mode').value : 'rts'));
 }
-// 回合制限制区：初始按当前模式显示/隐藏
+// 回合制限制区：初始按当前模式显示/隐藏（仅 go）
 if ($('golimits-build-adv')) {
-  $('golimits-build-adv').style.display = (($('world-mode') && $('world-mode').value) === 'go') ? '' : 'none';
+  $('golimits-build-adv').style.display = _isGoMode(_modeNormalize($('world-mode') ? $('world-mode').value : 'rts')) ? '' : 'none';
 }
 
 async function createRoomFlow() {
@@ -790,7 +828,7 @@ async function refreshRoomList() {
     if (!rooms.length) { box.innerHTML = '<span style="color:#6e7681">暂无公开房间 —— 点上面「建房」开一局</span>'; return; }
     box.innerHTML = rooms.map(r => `
       <div class="stat" style="cursor:pointer" data-code="${r.code}">
-        <span>${escapeHtml(r.name || r.code)} · ${r.mode === 'go' ? '回合制' : '实时'}</span>
+        <span>${escapeHtml(r.name || r.code)} · ${escapeHtml(modeLabel(r.mode))}</span>
         <b>${r.seatCount}/${r.maxPlayers} · ${r.phase === 'lobby' ? '待建世界' : (r.started ? '进行中' : '已就绪')} ▸</b>
       </div>`).join('');
     box.querySelectorAll('[data-code]').forEach(el => {
@@ -819,7 +857,7 @@ if ($('create-room')) $('create-room').onclick = () => createRoomFlow();
 
 // 单人开局：1 人 + 3 电脑（总席位 4）。先加入自己再补电脑，避免电脑把席位占满。
 if ($('quick-room')) $('quick-room').onclick = async () => {
-  const mode = ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts';
+  const mode = _modeNormalize($('world-mode') ? $('world-mode').value : 'rts');
   try {
     const r = await api('POST', '/api/rooms', {
       name: '快速开局', maxPlayers: 4, visibility: 'public', mode,
@@ -844,16 +882,13 @@ if ($('quick-room')) $('quick-room').onclick = async () => {
 // ---- 房间内（房主）控制 ----
 if ($('lobby-build')) $('lobby-build').onclick = async () => {
   try {
-    const mode = ($('world-mode') && $('world-mode').value) === 'go' ? 'go' : 'rts';
+    const mode = _modeNormalize($('world-mode') ? $('world-mode').value : 'rts');
     const d = await api('POST', `/api/rooms/${state.roomCode}/world`, { mode });
     state.worldId = d.worldId; state.mode = d.mode;
     renderLobby(d.room); joinWS();
   } catch (e) { toast('建世界失败：' + e.message); }
 };
-if ($('lobby-start')) $('lobby-start').onclick = async () => {
-  try { const d = await api('POST', `/api/rooms/${state.roomCode}/start`); renderLobby(d.room); toast('游戏已开始（可随时加入）'); }
-  catch (e) { toast(e.message); }
-};
+// 注：「开始游戏」与「暂停/恢复」已合并为 lobby-pause 单个按钮（见其 onclick 与 renderLobby 标签逻辑）。
 if ($('lobby-add-ai')) $('lobby-add-ai').onclick = async () => {
   try { const d = await api('POST', `/api/rooms/${state.roomCode}/ai`); renderLobby(d.room); }
   catch (e) { toast('加电脑失败：' + e.message); }
@@ -867,14 +902,20 @@ if ($('lobby-remove-ai')) $('lobby-remove-ai').onclick = async () => {
     renderLobby(d.room);
   } catch (e) { toast('移除失败：' + e.message); }
 };
+// 合并按钮：未开始→「开始游戏」(POST /start 同时解冻)；已开始且暂停→「恢复」；运行中→「暂停」。
 if ($('lobby-pause')) $('lobby-pause').onclick = async () => {
   try {
-    const cur = !!(state._roomInfo && state._roomInfo.paused);
-    const d = await api('POST', `/api/rooms/${state.roomCode}/pause`, { paused: !cur });
-    state._roomInfo = d.room;
-    toast(d.paused ? '⏸ 已暂停（房主可恢复）' : '▶ 已恢复');
-    renderLobby(d.room);
-  } catch (e) { toast('暂停失败：' + e.message); }
+    const info = state._roomInfo || await api('GET', `/api/rooms/${state.roomCode}`);
+    if (!info.started) {
+      const d = await api('POST', `/api/rooms/${state.roomCode}/start`);
+      state._roomInfo = d.room; toast('游戏已开始（可随时加入）');
+    } else {
+      const cur = !!(info.paused);
+      const d = await api('POST', `/api/rooms/${state.roomCode}/pause`, { paused: !cur });
+      state._roomInfo = d.room; toast(d.paused ? '⏸ 已暂停（房主可恢复）' : '▶ 已恢复');
+    }
+    renderLobby(state._roomInfo);
+  } catch (e) { toast('操作失败：' + e.message); }
 };
 if ($('lobby-save')) $('lobby-save').onclick = async () => {
   try { await api('POST', `/api/rooms/${state.roomCode}/save`); toast('✅ 已存档（任何玩家都可存档）'); }
@@ -884,8 +925,8 @@ if ($('lobby-save')) $('lobby-save').onclick = async () => {
 if ($('victory-edit')) $('victory-edit').onclick = async () => {
   if (!state.roomCode) { toast('先建房/进房'); return; }
   const info = state._roomInfo || await api('GET', `/api/rooms/${state.roomCode}`);
-  const mode = info.mode === 'go' ? 'go' : 'rts';
-  $('modal-title').textContent = mode === 'go' ? '编辑胜利条件 / 回合制限制（房主）' : '编辑胜利条件（房主）';
+  const mode = _modeNormalize(info.mode);
+  $('modal-title').textContent = _isGoMode(mode) ? '编辑胜利条件 / 回合制限制（房主）' : '编辑胜利条件（房主）';
   const gl = normGoLimitsClient(info.goLimits);
   $('modal-body').innerHTML = `
     <div style="font-size:13px;line-height:1.6">
@@ -894,7 +935,7 @@ if ($('victory-edit')) $('victory-edit').onclick = async () => {
       <div style="color:#6e7681;font-size:11px;margin-top:8px">
         开启一条当前已满足的线，将在下一拍即判定；本局无胜利条件（全不勾）时需手动结束。
       </div>
-      ${mode === 'go' ? `
+      ${_isGoMode(mode) ? `
       <div style="margin-top:12px;padding-top:8px;border-top:1px solid #30363d">
         <div style="color:#8b949e;font-size:12px;margin-bottom:6px">回合制限制（改后下一局/下一步即生效）</div>
         <div class="row" style="align-items:center;gap:6px;flex-wrap:wrap">
@@ -923,7 +964,7 @@ if ($('victory-edit')) $('victory-edit').onclick = async () => {
   const onOk = async () => {
     const lines = collectVictoryLines('victory-lines-edit-list', mode);
     const payload = { victoryLines: lines };
-    if (mode === 'go' && $('golimits-edit-moves')) {
+    if (_isGoMode(mode) && $('golimits-edit-moves')) {
       payload.goLimits = {
         maxMoves: clampInt($('golimits-edit-moves').value, 20, 600, 150),
         turnMs: clampInt($('golimits-edit-turn').value, 5, 300, 30) * 1000,
@@ -949,7 +990,7 @@ if ($('board-edit')) $('board-edit').onclick = async () => {
   if (!state.roomCode) { toast('先建房/进房'); return; }
   const info = state._roomInfo || await api('GET', `/api/rooms/${state.roomCode}`);
   if (info.started) { toast('对局已开始，棋盘形状已锁定'); return; }
-  const mode = info.mode === 'go' ? 'go' : 'rts';
+  const mode = _modeNormalize(info.mode);
   $('modal-title').textContent = '编辑棋盘形状（房主）';
   $('modal-body').innerHTML = `
     <div style="font-size:13px;line-height:1.6">
@@ -1072,7 +1113,7 @@ function renderLobby(info) {
     $('room-settings-info').textContent = `落子 ${spt} 颗/回合 · 死亡宽限 ${ldd} 回合`;
   }
   // 胜利条件展示（只读；房主可点[编辑]改）
-  const vMode = info.mode === 'go' ? 'go' : 'rts';
+  const vMode = _modeNormalize(info.mode);
   if ($('victory-info')) {
     $('victory-info').textContent = victoryLinesText(info.victoryLines, vMode)
       + (info.isOwner || (state.user && info.hostId === state.user.id) ? '' : '（房主设定）');
@@ -1105,11 +1146,14 @@ function renderLobby(info) {
   if ($('board-edit') && info.started) { $('board-edit').disabled = true; }
   // 房主按钮
   if ($('lobby-build-row')) $('lobby-build-row').style.display = (isHost && phase === 'lobby') ? 'flex' : 'none';
-  if ($('lobby-start-row')) $('lobby-start-row').style.display = (isHost && phase !== 'lobby' && !info.started) ? 'flex' : 'none';
+  // 合并按钮（原「开始游戏」+「暂停/恢复」）：房主始终可见；标签随状态切换。
   ['lobby-add-ai', 'lobby-remove-ai', 'lobby-pause'].forEach(id => {
     const el = $(id); if (el) { el.disabled = !isHost; el.style.opacity = isHost ? '1' : '.45'; }
   });
-  if ($('lobby-pause')) $('lobby-pause').textContent = info.paused ? '恢复(房主)' : '暂停(房主)';
+  if ($('lobby-pause')) {
+    $('lobby-pause').textContent = !info.started ? '开始游戏' : (info.paused ? '恢复' : '暂停');
+    $('lobby-pause').className = !info.started ? 'primary' : '';
+  }
   // 席位列表
   const box = $('seat-list');
   if (box) {
@@ -1149,10 +1193,11 @@ $('logout').onclick = () => {
   onLogout();
 };
 
-// 复制邀请链接（永久可分享：用房间码拼出 ?room= 链接；go 模式附带 ?mode=go）
+// 复制邀请链接（永久可分享：用房间码拼出 ?room= 链接；任何非 rts 的已注册模式附带 ?mode=<id>）
 $('copy-invite').onclick = async () => {
   if (!state.roomCode) { toast('先建房/进房'); return; }
-  const modeQ = isGo() ? '&mode=go' : '';
+  const m = _modeNormalize(currentModeId());
+  const modeQ = (m && m !== 'rts') ? ('&mode=' + encodeURIComponent(m)) : '';
   const link = `${location.origin}/?room=${state.roomCode}${modeQ}`;
   try { await navigator.clipboard.writeText(link); toast('已复制邀请链接'); }
   catch { toast('链接：' + link); }
@@ -1336,6 +1381,13 @@ window.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 'f' && !typing) e.preventDefault();
     return;
   }
+  // 棋盘类新模式（gomoku / weiqi）：按模式分派键盘（VIEWS 表驱动）。
+  // 仅当该模式声明了 input.onKeyDown 且其"认领"了本次按键（返回 true）才接管并终止；
+  // go 已在上方分支内 return，rts 无 VIEWS.input → 二者键位完全不受影响。
+  const mvk = VIEWS[currentModeId()];
+  if (mvk && mvk.input && typeof mvk.input.onKeyDown === 'function') {
+    if (mvk.input.onKeyDown(e) === true) return;
+  }
   // F：落子（消耗 1 颗种子，在脚下种下 **1 格**强细胞；要自己摆成 ≥3 连片或 2×2 才稳）。按住不重复发送。
   // 自动攻击+自动收集已服务端处理，无需手动攻击/收集键。
   if (e.key.toLowerCase() === 'f' && !state._plantPressed) {
@@ -1399,10 +1451,26 @@ function isSpectator() {
   const me = findMe();
   return !!(me && (me.won || me.lost));
 }
-// 当前世界是否为回合制（go）模式。以 snap.mode 为准（服务端权威），state.mode 作为兜底。
-function isGo() {
-  return (state.world && state.world.mode === 'go') || state.mode === 'go';
+// 当前模式 id：以 snap.mode（服务端权威）为准，state.mode 作兜底。
+function currentModeId() {
+  return (state.world && state.world.mode) || state.mode;
 }
+// 当前世界是否为回合制（go）模式。路由到前端模式注册表（public/modes/index.js）。
+function isGo() {
+  return _isGoMode(currentModeId());
+}
+// 模式视图分派表：新增模式（gomoku / weiqi / checkers / xiangqi …）在此登记 { render, hud, input? } 即可接入主循环，
+// 主干 render()/renderHud()/mousedown 不再写 `if (isGo())` 分支。（renderGo/renderGoHud 为函数声明，已提升，可安全引用。）
+// 棋盘类新模式（gomoku / weiqi）走"依赖注入工厂"：传入 env（画布/状态/工具函数），返回自包含视图。
+const VIEW_ENV = {
+  ctx, cv, state, $, toast, modal, escapeHtml, sameId, sendIntent,
+  setModeVisibility: setGoVisibility,   // 复用"隐藏 rts 面板"的通用可见性开关
+};
+const VIEWS = {
+  go: { render: renderGo, hud: renderGoHud },
+  gomoku: createGomokuView(VIEW_ENV),
+  weiqi: createWeiqiView(VIEW_ENV),
+};
 // go 模式：我方阵营号（1..8，多方局每人一个阵营）。以 go.seats 为权威。
 function goMyFaction() {
   const w = state.world;
@@ -1556,12 +1624,22 @@ cv.addEventListener('mousedown', (e) => {
     renderHud();
     return;
   }
+  // 棋盘类新模式（gomoku / weiqi）：走 VIEWS 的 input 分派（go 无 input 钩子 → 不受影响；rts 未登记 → 跳过）。
+  const mvIn = VIEWS[currentModeId()];
+  if (mvIn && mvIn.input && mvIn.input.onMouseDown) {
+    mvIn.input.onMouseDown(e, { sx, sy, wld });
+    return;
+  }
   if (e.button === 0 || e.button === 2) {
     state.moveTarget = { x: wld.x, y: wld.y };
   }
 });
 // 滚轮缩放地图（锚定屏幕中心=玩家），解决"地图太小/放大后错位"
-cv.addEventListener('wheel', (e) => {
+// 监听挂在 canvas-wrap 父节点上：滚轮从画布或 HUD 浮层冒泡上来都能捕获，
+// 避免"鼠标停在 HUD 上滚轮无效"。聊天记录区保留原生滚动（不拦截它的 wheel）。
+const _zoomHost = cv.parentElement || cv;
+_zoomHost.addEventListener('wheel', (e) => {
+  if (e.target && e.target.closest && e.target.closest('#chat-log')) return; // 让聊天记录可滚动
   e.preventDefault();
   const z = state.zoom || 1;
   const nz = Math.max(0.5, Math.min(4, z * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
@@ -1597,7 +1675,7 @@ function renderDebug() {
     'cv   ' + cv.width + 'x' + cv.height + '   wrap ' + (wrap ? wrap.clientWidth + 'x' + wrap.clientHeight : '?') + '\n' +
     'zoom ' + (state.zoom || 1).toFixed(2) + '   scale ' + t.scale.toFixed(2) + '   cam ' + t.cx.toFixed(1) + ',' + t.cy.toFixed(1) + '\n' +
     'me   ' + (me ? (me.x.toFixed(1) + ',' + me.y.toFixed(1) + '  lost=' + !!me.lost + ' won=' + !!me.won) : 'null')
-    + '   mode ' + (isGo() ? 'go' : 'rts');
+    + '   mode ' + currentModeId();
 }
 
 // ============== WS ==============
@@ -1768,7 +1846,7 @@ function openSocket() {
           const cn = { flourish: '🌱 繁盛：本回合演化加速 ×2', frost: '❄ 寒潮：本回合暂停演化', mutate: '🔥 拥挤突变：诞生更拥挤（阈值 5）' }[ev.event] || '世界事件';
           toast(cn, 3200);
         }
-        if (ev.type === 'go_timeout') {
+        if (ev.type === 'go_timeout' && isGo()) {
           toast((sameId(ev.playerId, me && me.id) ? '你' : '对手') + '超时 · 自动停一手', 2200);
         }
         // FIX-3(b)：非法落子被拒 → 留红叉（只在拒绝我方落子时提示/留痕）
@@ -2212,7 +2290,9 @@ function bakeResources(resPts) {
 const GO_BOARD = 32;   // 与服务端 World.GO_BOARD_W 一致
 function goViewTransform() {
   const w = cv.width, h = cv.height;
-  const scale = Math.min(w / GO_BOARD, h / GO_BOARD);
+  // 套用游戏内缩放（state.zoom，滚轮控制）：go 棋盘与 rts 共用同一缩放键，避免"go 不能缩放"。
+  // 同时 goScreenToCell 也走它换算点击坐标，所以缩放后点击落子仍 1:1 对齐、不会错位。
+  const scale = Math.min(w / GO_BOARD, h / GO_BOARD) * (state.zoom || 1);
   const cx = (w - GO_BOARD * scale) / 2;
   const cy = (h - GO_BOARD * scale) / 2;
   return { scale, cx, cy };
@@ -2443,8 +2523,10 @@ function render() {
     return;
   }
   try {  // 渲染异常隔离：任何一帧出 bug 都显示错误而不是整图黑屏
-  // go（回合制 · 演化棋）模式：只画一个棋盘，不渲染地形/资源/涌现单位/玩家头像/潮汐/纪元。
-  if (isGo()) { renderGo(); return; }
+  // 模式视图分派（走 VIEWS 表）：go（回合制 · 演化棋）等模式只画自己的棋盘/视图，
+  // 不渲染 rts 的地形/资源/涌现单位/玩家头像/潮汐/纪元。新增模式 = 在 VIEWS 登记，不改此处主干。
+  const mv = VIEWS[currentModeId()];
+  if (mv && mv.render) { mv.render(); return; }
   // 视口：以本地玩家为中心（与鼠标映射共用 viewTransform，含游戏内缩放）
   const me = findMe();
   const { scale, cx, cy } = viewTransform();
@@ -3353,7 +3435,7 @@ function renderVictoryHud() {
   const el = $('victory-hud');
   if (!el) return;
   const s = (state.world && state.world.settings) || {};
-  const mode = isGo() ? 'go' : 'rts';
+  const mode = currentModeId();
   const txt = victoryLinesText(s.victoryLines, mode);
   const none = txt.indexOf('无（') === 0;
   el.innerHTML = `胜利条件：<b>${escapeHtml(txt)}</b>`;
@@ -3366,7 +3448,7 @@ function renderBoardHud() {
   const el = $('board-hud');
   if (!el) return;
   const s = (state.world && state.world.settings) || {};
-  const mode = isGo() ? 'go' : 'rts';
+  const mode = currentModeId();
   const txt = boardInfoText(s.board, mode);
   el.innerHTML = `棋盘：<b>${escapeHtml(txt)}</b>`;
   el.style.display = 'block';
@@ -3378,8 +3460,9 @@ function renderHud() {
   renderVictoryHud();
   // 棋盘形状常驻行（rts 与 go 都显示；默认矩形也标注）
   renderBoardHud();
-  // go（回合制）模式：隐藏全部 rts 元素，只显示 go 专用 HUD。
-  if (isGo()) { renderGoHud(); return; }
+  // 模式 HUD 分派（走 VIEWS 表）：go 等模式只显示自己的 HUD，隐藏 rts 元素。新增模式 = 在 VIEWS 登记。
+  const mvh = VIEWS[currentModeId()];
+  if (mvh && mvh.hud) { mvh.hud(); return; }
   // rts 模式：确保 go 专用元素隐藏
   const goh = $('go-hud'); if (goh) goh.style.display = 'none';
   const gres = $('go-res'); if (gres) gres.style.display = 'none';
@@ -3409,7 +3492,10 @@ function renderHud() {
     $('room-phase').textContent = state.world.paused ? '进行中 · ⏸ 暂停'
       : (state.world.started ? '进行中' : '已就绪（未开始）');
   }
-  if ($('lobby-pause')) $('lobby-pause').textContent = state.world.paused ? '恢复(房主)' : '暂停(房主)';
+  if ($('lobby-pause') && state.world) {
+    $('lobby-pause').textContent = !state.world.started ? '开始游戏' : (state.world.paused ? '恢复' : '暂停');
+    $('lobby-pause').className = !state.world.started ? 'primary' : '';
+  }
   if ($('room-lat')) $('room-lat').textContent = '惯性';
   if (state.roomCode) $('room-code').textContent = state.roomCode;
   // 资源
@@ -3591,8 +3677,8 @@ function updateHudTarget(ents) {
 
 // ============== 主循环 ==============
 function inputToIntent() {
-  // go（回合制）模式：没有移动，落子由点击处理；不发送任何移动意图。
-  if (isGo()) { state.moveTarget = null; return; }
+  // 回合制模式（go / gomoku / weiqi，tickDriver=interval）：没有移动，落子由点击处理；不发送任何移动意图。
+  if (_isIntervalMode(currentModeId())) { state.moveTarget = null; return; }
   // 出局/胜利后进入观战：不再发送任何移动意图
   if (isSpectator()) { state.moveTarget = null; return; }
   let dx = 0, dy = 0;
@@ -3645,12 +3731,13 @@ function onLogin() {
   // 若通过他人分享的永久链接进入，登录后立即加入该房间
   const params = new URLSearchParams(location.search);
   const code = params.get('room');
-  // URL ?mode=go（GO-19）：自动把模式下拉选中为"回合制"，便于邀请链接直达。
+  // URL ?mode=<id>（GO-19）：若为**已注册模式**则自动选中下拉，便于邀请链接直达任意模式。
+  // 用 getMode(urlMode).id === urlMode 判定（未知值不改，退回默认 rts），避免把未注册值当成模式。
   const urlMode = params.get('mode');
-  if (urlMode === 'go') {
+  if (urlMode && _modeGet(urlMode).id === urlMode) {
     const sel = $('world-mode');
-    if (sel) sel.value = 'go';
-    state.mode = 'go';
+    if (sel) sel.value = urlMode;
+    state.mode = urlMode;
   }
   // FIX-1：不再在登录时无条件弹 rts 简报（此时还不知道玩家要进 rts 还是 go）。
   // 若通过邀请链接进入，先加入房间；简报统一挪到"首个 snap 到达、模式已确定"后分流弹出

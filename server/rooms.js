@@ -14,6 +14,7 @@ import { roomsRepo, settingsRepo } from './db/index.js';
 import { hashPassword, verifyPassword } from './auth.js';
 import { activeWorlds, worldModes, pendingIntents, tickCounters } from './worldhub.js';
 import { World as WorldEngine } from './engine.js';
+import { normalizeMode, availableVictoryLinesForMode } from './modes/index.js';
 
 /** code -> room（内存为准，避免 DB 往返影响实时人数/状态） */
 export const roomHub = new Map();
@@ -72,7 +73,8 @@ export function normVictoryLines(v, mode) {
   if (o && typeof o === 'object') {
     for (const k of Object.keys(out)) if (typeof o[k] === 'boolean') out[k] = o[k];
   }
-  if (mode === 'go') { out.economy = false; out.singularity = false; out.survival = false; }
+  const allow = availableVictoryLinesForMode(mode);
+  for (const k of Object.keys(out)) if (!allow.includes(k)) out[k] = false;
   return out;
 }
 
@@ -109,7 +111,7 @@ export function normVictoryThresholds(v) {
 /** 该模式可用的胜利线键集（转发引擎侧；go 仅 territory）。 */
 export function availableVictoryLines(mode) {
   if (WorldEngine && typeof WorldEngine.availableLines === 'function') return WorldEngine.availableLines(mode);
-  return mode === 'go' ? ['territory'] : ['territory', 'economy', 'singularity', 'survival'];
+  return availableVictoryLinesForMode(mode);
 }
 
 /**
@@ -168,7 +170,7 @@ export async function createRoom(o) {
   const passhash = (visibility === 'private' && o.password) ? await hashPassword(String(o.password)) : null;
   const stonesPerTurn = normStonesPerTurn(o.stonesPerTurn);
   const lonelyDeathDelay = normLonelyDeathDelay(o.lonelyDeathDelay);
-  const roomMode = o.mode === 'go' ? 'go' : (o.mode === 'rts' ? 'rts' : null);
+  const roomMode = normalizeMode(o.mode, null);   // 已注册模式 → 该 id；未指定/非法 → null（沿用原语义）
   // 胜利条件（房主设定；归一后写入 → DB 镜像 → 重建时透传）
   const victoryLines = normVictoryLines(o.victoryLines, roomMode);
   const victoryThresholds = normVictoryThresholds(o.victoryThresholds);
