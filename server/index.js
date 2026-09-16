@@ -60,12 +60,26 @@ async function main() {
   try {
     dbInfo = await initDB();
   } catch (e) {
+    // 静默回退是危险的：线上若因磁盘/权限异常落到内存库，账号/房间/存档会在重启后全部丢失，
+    // 而运维往往要到"用户回来发现号没了"才知道。故保留"绝不因 DB 起不来"的兜底，
+    // 但把回退这件事喊出来（多行告警 + 排查指引）。
     console.warn('[db] file store init failed → fallback to :memory: —', e && e.message);
+    console.warn('[db] !! 当前运行在【内存模式】：所有账号 / 房间 / 存档在服务重启后会全部丢失。');
+    console.warn('[db]    排查：检查 DB_PATH 所指目录的写权限与磁盘空间；');
+    console.warn('[db]          以 `node server/index.js` 启动时默认使用 ./server/data/game.db（可用 DB_PATH 覆盖）。');
     process.env.DB_PATH = ':memory:';
     setDbPath(':memory:');
     dbInfo = await initDB();
   }
   console.log('[db]', dbInfo.type, '(' + (process.env.DB_PATH || ':memory:') + ')');
+
+  // 生产安全自检：JWT_SECRET 绝不能沿用仓库里的默认值。
+  // auth.js 的兜底串是明写在源码里的公开字符串，未覆盖 = 任何人都能签发任意用户（含管理员）的令牌。
+  if (!process.env.JWT_SECRET) {
+    console.warn('[security] !! JWT_SECRET 未设置，当前使用源码内的默认密钥。');
+    console.warn('[security]    任何人都能伪造登录令牌直接拿到管理员权限，等同于后台完全开放。');
+    console.warn('[security]    上线前务必设置：JWT_SECRET=<至少 32 位随机串>');
+  }
 
   // 管理员自举（master 逃生账号从环境变量重建；未配置 MASTER_USERNAME 则无副作用）。
   await bootstrapMaster();
