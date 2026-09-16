@@ -3284,6 +3284,26 @@ function renderGoHud() {
           + `${s.botControlled ? '<span class="dim">(代打)</span>' : (s.isAI ? '<span class="dim">(电脑)</span>' : '')}</span>`;
       }).join('<span class="dim"> · </span>')
     : `<span>● 黑 <b>${cs ? (cs.black || 0) : (sc.black || 0)}</b>子 · ○ 白 <b>${cs ? (cs.white || 0) : (sc.white || 0)}</b>子</span>`;
+  // 上回合演化的得失归因（仅 go 模式使用；实时模式不做）。
+  // 数据来源：服务端 _goEvolveDiff 随 go_evolve 事件下发并存于快照 go.lastEvolve。
+  // 目的：让"这一拍演化到底让我多了什么、丢了什么"可见 → 玩家能归因，而不是觉得演化是随机噪音。
+  let evHtml = '';
+  {
+    const le = g.lastEvolve || null;
+    const mySeat0 = seats.find(s => s.playerId != null && sameId(s.playerId, uid));
+    const fac = (mySeat0 && mySeat0.faction != null) ? mySeat0.faction : myF;
+    if (le && fac) {
+      const gain = (le.gained && le.gained[fac]) || 0;
+      const loss = (le.lost && le.lost[fac]) || 0;
+      const steps = le.steps || 0;
+      evHtml =
+        `<span class="dim">上回合演化</span>` +
+        `<b style="color:${gain > 0 ? '#56d364' : '#8b949e'}">+${gain}</b>` +
+        `<span class="dim">/</span>` +
+        `<b style="color:${loss > 0 ? '#ff6b6b' : '#8b949e'}">−${loss}</b>` +
+        `<span class="dim">（${steps} 步）</span>`;
+    }
+  }
   const sec = Math.ceil((g.msLeft || 0) / 1000);
   const evCn = { calm: '平静', flourish: '繁盛（演化 ×2）', frost: '寒潮（暂停演化）', mutate: '拥挤突变（阈值 5）' }[g.event] || '平静';
   const phaseTxt = g.phase === 'over' ? '终局' : (myTurn ? '▶ 轮到你' : '等待对手…');
@@ -3316,6 +3336,7 @@ function renderGoHud() {
     `<span style="display:inline-flex;align-items:center;gap:5px">${ringSvg}` +
       `<b style="color:${sec <= 5 ? '#ff6b6b' : '#ffd479'}">${g.phase === 'over' ? '—' : sec + 's'}</b></span>` +
     `<span>事件 <b>${evCn}</b></span>` +
+    (evHtml ? `<span>${evHtml}</span>` : '') +
     `<span>本回合可落 <b>${stoneBudget}</b> 颗<span class="dim"> · 已预选 ${pendingN}</span></span>` +
     `<span style="margin-left:auto;display:inline-flex;gap:4px;flex-wrap:wrap;max-width:56%">${scoreHtml}</span>` +
     `<span class="go-actions">` +
