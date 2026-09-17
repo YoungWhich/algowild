@@ -8,8 +8,8 @@ const rts = {
   id: 'rts',
   label: '实时生存对战',
   tickDriver: 'realtime', // 20 TPS 主循环驱动
-  boardMax: 32, // 生命层恒 32×32（棋盘只做遮罩）
-  growLifeLayer: false,
+  boardMax: 128, // 2 的幂：棋盘可设 1..128（128/REGION_W=16 整数，区域控制对齐）
+  growLifeLayer: true, // 生命层随棋盘扩容（默认 board=null 仍 32；自定义大棋盘才放大）
   availableVictoryLines: ['territory', 'economy', 'singularity', 'survival'],
   // install / tick / onAddPlayer / onAddAI / routeIntent / snapshot 均留空 → 走主干默认路径
 };

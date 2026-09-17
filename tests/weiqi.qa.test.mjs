@@ -314,7 +314,7 @@ test('WQA-15 注册表元数据 + 隔离：weiqi 无 intervalStep（不被 go �
   assert.equal(getMode('weiqi').id, 'weiqi');
   assert.equal(getMode('weiqi').tickDriver, 'interval');
   assert.equal(getMode('weiqi').intervalMs, 1000);
-  assert.equal(boardMaxForMode('weiqi'), 19);
+  assert.equal(boardMaxForMode('weiqi'), 128);
   assert.deepEqual(availableVictoryLinesForMode('weiqi'), ['territory']);
   assert.equal(normalizeMode('weiqi'), 'weiqi');
   assert.ok(listModes().some((m) => m.id === 'weiqi'));

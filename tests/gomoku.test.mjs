@@ -293,7 +293,7 @@ test('GK-15 注册表：gomoku 已注册（id/驱动/上限/胜利线/归一/清
   assert.equal(getMode('gomoku').label, '五子棋');
   assert.equal(getMode('gomoku').tickDriver, 'interval');
   assert.equal(getMode('gomoku').intervalMs, 1000);
-  assert.equal(boardMaxForMode('gomoku'), 15);
+  assert.equal(boardMaxForMode('gomoku'), 128);
   assert.deepEqual(availableVictoryLinesForMode('gomoku'), ['territory']);
   assert.equal(normalizeMode('gomoku'), 'gomoku');
   assert.equal(gomokuDef.id, 'gomoku');

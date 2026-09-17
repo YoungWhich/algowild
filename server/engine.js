@@ -843,7 +843,7 @@ export class World {
   /** 三态值 → 字符（编码用）。索引即取值。 */
   static SHAPE_CHARS_INV = ['.', '#', 'x'];
   /** 画布尺寸上限 / 下限（方格数）。 */
-  static BOARD_MAX = 100;
+  static BOARD_MAX = 128;          // 棋盘/生命层边长硬上限（与所有模式 boardMax 对齐；128=2^7，128/REGION_W=16 整数）
   static BOARD_MIN = 1;
   /**
    * 唯一墙判定纯函数：(lx,ly) 是否「不可落子 / 墙」——越界 ∪ 形状外 ∪ 虚空 → true。
@@ -1135,7 +1135,8 @@ export class World {
     // go 模式：生命层**只涨不缩** —— max(32, 棋盘宽, 棋盘高)。
     // 棋盘 ≤32 时保持 32×32（超出棋盘的部分由 World.isWall 判为墙，行为与改造前逐字节一致）；
     // 棋盘 >32 时扩容到棋盘尺寸，使 100×100 等大盘真正可用（此前会因坐标越界崩溃）。
-    // rts 恒 32（1 生命格 = 6×6 世界格，棋盘只做遮罩），且 rts 棋盘已被 normBoard 限到 ≤32。
+    // rts：默认 board=null → 生命层回 32（1 生命格 = 6×6 世界格）；自定义棋盘 >32 时随棋盘扩容（max(32,w,h)）。
+    // rts 棋盘上限 128（2 的幂：128/REGION_W=16 整数，区域控制对齐；normBoard 已限到 ≤128）。
     this._setLifeW(getMode(this.mode).growLifeLayer ? Math.max(World.LIFE_W, cfg.w, cfg.h) : World.LIFE_W, true);
   }
   /**

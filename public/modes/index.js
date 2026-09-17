@@ -14,7 +14,7 @@ export const MODES = {
     label: '实时生存对战',
     kind: 'rts',
     tickDriver: 'realtime',
-    boardMax: 32,
+    boardMax: 128,
     boardDefault: 32,
   },
   go: {
@@ -22,7 +22,7 @@ export const MODES = {
     label: '回合制演化棋',
     kind: 'go',
     tickDriver: 'interval',
-    boardMax: 100,
+    boardMax: 128,
     boardDefault: 32,
   },
   gomoku: {
@@ -30,7 +30,7 @@ export const MODES = {
     label: '五子棋',
     kind: 'gomoku',
     tickDriver: 'interval',
-    boardMax: 15,
+    boardMax: 128,
     boardDefault: 15,
   },
   weiqi: {
@@ -38,7 +38,7 @@ export const MODES = {
     label: '标准围棋',
     kind: 'weiqi',
     tickDriver: 'interval',
-    boardMax: 19,
+    boardMax: 128,
     boardDefault: 19,
   },
 };
@@ -64,11 +64,11 @@ export function isIntervalMode(id) {
   return getMode(id).tickDriver === 'interval';
 }
 
-/** 该模式可编辑棋盘尺寸上限（rts 32 / go 100 / gomoku 15 / weiqi 19）。
- *  未指定 / 未知 → 宽松 100（与改造前 client 端 `mode !== 'rts' → 100` 语义一致）。 */
+/** 该模式可编辑棋盘尺寸上限（rts·go·gomoku·weiqi 均为 128）。
+ *  未指定 / 未知 → 宽松 128（与改造前 client 端 `mode !== 'rts' → 100` 语义对齐，现统一为 128）。 */
 export function boardMaxForMode(id) {
   const m = MODES[id];
-  return (m && m.boardMax != null) ? m.boardMax : 100;
+  return (m && m.boardMax != null) ? m.boardMax : 128;
 }
 
 /** 该模式棋盘尺寸默认值（rts 32 / go 32 / gomoku 15 / weiqi 19）。未指定 / 未知 → 32。 */

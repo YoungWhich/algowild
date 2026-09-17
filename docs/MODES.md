@@ -44,7 +44,7 @@
 | `id` | `string` | ✅ | 唯一 id，如 `'gomoku'` |
 | `label` | `string` | ✅ | 人类可读名（房间列表/下拉用） |
 | `tickDriver` | `'realtime' \| 'interval'` | ✅ | 主干如何驱动（见 §3） |
-| `boardMax` | `number` | ✅ | 可编辑棋盘尺寸上限（rts 32 / go 100） |
+| `boardMax` | `number` | ✅ | 可编辑棋盘尺寸上限（rts·go·gomoku·weiqi 均为 128） |
 | `growLifeLayer` | `boolean` | ⬜ | 生命层是否随棋盘尺寸扩容（go=true，默认 false） |
 | `availableVictoryLines` | `string[]` | ✅ | 本模式可用胜利线（`territory/economy/singularity/survival` 的子集） |
 | `install(World)` | `fn` | ⬜ | 把本模式方法挂到 `World.prototype`（mixin，方法名建议 `_<id>`* 前缀） |

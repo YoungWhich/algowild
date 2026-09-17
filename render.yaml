@@ -2,7 +2,7 @@
 # 用法：在 Render 新建 "Blueprint" 服务，连上本仓库，选这个文件即可。
 # 也可以不走这个文件、直接在 Dashboard 手动填（见 docs/deploy-render-b.md）。
 #
-# 注意：MASTER_USERNAME / MASTER_PASSWORD / ADMIN_* 等含密钥的变量
+# 注意：JWT_SECRET / MASTER_USERNAME / MASTER_PASSWORD / ADMIN_* 等含密钥的变量
 # 不要写进本文件（会被提交到 Git）。请在 Render Dashboard → Environment 里手动填。
 services:
   - type: web
@@ -23,4 +23,6 @@ services:
       - key: MASTER_PASSWORD
         sync: false
       - key: ADMIN_ACCESS_KEY
+        sync: false
+      - key: JWT_SECRET
         sync: false

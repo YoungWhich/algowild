@@ -11,7 +11,7 @@ const go = {
   label: '回合制演化棋',
   tickDriver: 'interval', // 1Hz 计时循环驱动（无 20 TPS tick）
   intervalMs: 1000,
-  boardMax: 100, // 棋盘即棋盘，1..100
+  boardMax: 128, // 棋盘即棋盘，1..128（2 的幂：128/REGION_W=16 整数）
   growLifeLayer: true, // 生命层随棋盘尺寸扩容（max(32, w, h)）
   availableVictoryLines: ['territory'],
   // 首次加载：把 go 的 _go* 方法族挂到 World.prototype（mixin）。

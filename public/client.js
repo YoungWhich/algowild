@@ -230,7 +230,7 @@ function clampInt(v, min, max, dflt) {
 //   位图索引：行优先 bmp[ly*w + lx]
 //   序列化：行优先，'.'=形状外 '#'=可落子 'x'=虚空，行间用 '/' 分隔（紧凑串）
 //   null = 默认矩形（实时 rts：32×32 生命格遮罩 / 回合制 go：32×32 棋盘），服务端把 null 归一为默认矩形。
-const BOARD_MAX = 100;         // 位图边长上限（含）
+const BOARD_MAX = 128;         // 位图边长上限（含）
 const BOARD_MIN = 1;           // 位图边长下限（含）
 const BOARD_OUT = 0, BOARD_PLAY = 1, BOARD_VOID = 2;
 const BOARD_CHAR = { 0: '.', 1: '#', 2: 'x' };
@@ -722,7 +722,7 @@ function onModeChange() {
   const mode = _modeNormalize($('world-mode') ? $('world-mode').value : 'rts');
   const cur = collectVictoryLines('victory-lines-build-list', 'rts'); // 以 rts（最宽松）读原始勾选，保留跨模式选择
   renderVictoryLines('victory-lines-build-list', mode, cur, true);
-  // 棋盘尺寸上限随模式变化（rts 32 / go 100 / gomoku 15 / weiqi 19）→ 重建编辑器
+  // 棋盘尺寸上限随模式变化（rts·go·gomoku·weiqi 均为 128）→ 重建编辑器
   buildBoardEditor(mode);
   // 回合制限制区仅 go 模式显示
   const glBox = $('golimits-build-adv');

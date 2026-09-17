@@ -13,7 +13,7 @@
 //                                     · 'realtime' → 20 TPS 主循环（rts）
 //                                     · 'interval' → 1Hz 计时循环（go / 棋盘类回合制）
 //   intervalMs?            number   interval 模式的步进周期（默认 1000）
-//   boardMax               number   可编辑棋盘尺寸上限（rts 32 / go 100 / gomoku 15 / weiqi 19）
+//   boardMax               number   可编辑棋盘尺寸上限（rts·go·gomoku·weiqi 均为 128）
 //   growLifeLayer?         boolean  生命层是否随棋盘尺寸扩容（go=true；自带棋盘的模式=false）
 //   availableVictoryLines  string[] 本模式可用胜利线（territory/economy/singularity/survival 子集）
 //   install?(World)                 首次加载时把本模式方法挂到 World.prototype（mixin，方法名建议 `_<id>*` 前缀）

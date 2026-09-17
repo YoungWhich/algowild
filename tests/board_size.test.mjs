@@ -74,22 +74,23 @@ test('BS-06 go 非方形 40×10：lifeW = max(w,h) = 40，超出棋盘的部分�
   assert.equal(wd._isPlayable(40, 0), false, '棋盘宽外 (40,0) 为墙');
 });
 
-test('BS-07 rts：棋盘尺寸上限 32（100 列形状被拒）', () => {
-  assert.equal(normBoard(mk(100, 100), 'rts'), null, '100 列与钳后 32 不符 → 拒绝');
-  assert.equal(normBoard(mk(33, 33), 'rts'), null, '33 列同理被拒');
+test('BS-07 rts：棋盘尺寸上限 128（129 列形状被拒）', () => {
+  assert.equal(normBoard(mk(129, 129), 'rts'), null, '129 列与钳后 128 不符 → 拒绝');
+  assert.ok(normBoard(mk(100, 100), 'rts'), '100×100 在 rts 下合法（≤128）');
+  assert.ok(normBoard(mk(33, 33), 'rts'), '33×33 合法');
   assert.deepEqual(normBoard(mk(32, 32), 'rts'), { w: 32, h: 32, shape: rect(32, 32) }, '32×32 合法');
   const wd = new World('bs_rts', 1, 42, { mode: 'rts', board: mk(32, 32) });
   wd._skipAIFill = true;
   wd._lifeInit();
-  assert.equal(wd.lifeW, 32, 'rts 生命层恒 32');
+  assert.equal(wd.lifeW, 32, 'rts 默认生命层 32（board 32×32 时 max(32,32,32)=32）');
 });
 
-test('BS-08 go：normBoard 允许到 100（>100 钳制后与形状不符 → 拒绝）', () => {
-  const b = normBoard(mk(100, 100), 'go');
-  assert.ok(b, '100×100 在 go 下合法');
-  assert.equal(b.w, 100);
-  assert.equal(b.h, 100);
-  assert.equal(normBoard(mk(101, 101), 'go'), null, '101 列与钳后 100 不符 → 拒绝');
+test('BS-08 go：normBoard 允许到 128（>128 钳制后与形状不符 → 拒绝）', () => {
+  const b = normBoard(mk(128, 128), 'go');
+  assert.ok(b, '128×128 在 go 下合法');
+  assert.equal(b.w, 128);
+  assert.equal(b.h, 128);
+  assert.equal(normBoard(mk(129, 129), 'go'), null, '129 列与钳后 128 不符 → 拒绝');
 });
 
 test('BS-09 snapshot.lifeW 反映真实生命层尺寸', () => {

@@ -285,7 +285,7 @@ test('GQA-14 注册表元数据 + 驱动方式隔离（gomoku 无 intervalStep�
   assert.equal(getMode('gomoku').id, 'gomoku');
   assert.equal(getMode('gomoku').tickDriver, 'interval');
   assert.equal(getMode('gomoku').intervalMs, 1000);
-  assert.equal(boardMaxForMode('gomoku'), 15);
+  assert.equal(boardMaxForMode('gomoku'), 128);
   assert.deepEqual(availableVictoryLinesForMode('gomoku'), ['territory']);
   assert.equal(normalizeMode('gomoku'), 'gomoku');
   assert.equal(normalizeMode('不存在的模式'), 'rts');

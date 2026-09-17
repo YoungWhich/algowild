@@ -91,11 +91,11 @@ test('MW-02 模式解析统一走注册表归一（_modeNormalize）', () => {
 test('MW-03 前端注册表 MODES 的 boardMax/boardDefault 与预期一致', async () => {
   const mod = await import('../' + FE_REG);
   const { MODES, boardMaxForMode, boardDefaultForMode, normalizeMode, getMode } = mod;
-  assert.equal(MODES.rts.boardMax, 32);   assert.equal(MODES.rts.boardDefault, 32);
-  assert.equal(MODES.go.boardMax, 100);   assert.equal(MODES.go.boardDefault, 32);
-  assert.equal(MODES.gomoku.boardMax, 15); assert.equal(MODES.gomoku.boardDefault, 15);
-  assert.equal(MODES.weiqi.boardMax, 19);  assert.equal(MODES.weiqi.boardDefault, 19);
-  assert.equal(boardMaxForMode('gomoku'), 15);
+  assert.equal(MODES.rts.boardMax, 128);   assert.equal(MODES.rts.boardDefault, 32);
+  assert.equal(MODES.go.boardMax, 128);   assert.equal(MODES.go.boardDefault, 32);
+  assert.equal(MODES.gomoku.boardMax, 128); assert.equal(MODES.gomoku.boardDefault, 15);
+  assert.equal(MODES.weiqi.boardMax, 128);  assert.equal(MODES.weiqi.boardDefault, 19);
+  assert.equal(boardMaxForMode('gomoku'), 128);
   assert.equal(boardDefaultForMode('gomoku'), 15);
   assert.equal(boardDefaultForMode('weiqi'), 19);
   assert.equal(boardDefaultForMode('不存在'), 32);   // 未知 → 32

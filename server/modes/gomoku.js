@@ -363,7 +363,7 @@ const def = {
   label: '五子棋',
   tickDriver: 'interval',   // 回合制：1Hz 计时循环驱动（无 20 TPS tick）
   intervalMs: 1000,
-  boardMax: GOMOKU_SIZE,    // 标准 15×15
+  boardMax: 128,            // 可设 1..128（默认仍 15，见 boardDefault）
   maxSeats: 2,              // 五子棋恒为 2 席（黑/白）；主干据此拒绝第 3 席（人类或电脑）
   growLifeLayer: false,     // 自带棋盘，不扩容 rts 生命层
   availableVictoryLines: ['territory'],

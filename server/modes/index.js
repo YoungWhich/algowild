@@ -13,7 +13,7 @@
 //                 'realtime' → 20 TPS 主循环（rts）
 //                 'interval' → 1Hz 计时循环（go、棋盘类回合制）
 //   intervalMs?: number   interval 模式的步进周期（默认 1000）
-//   boardMax: number      可编辑棋盘尺寸上限（rts 32 / go 100）
+//   boardMax: number      可编辑棋盘尺寸上限（rts·go·gomoku·weiqi 均为 128）
 //   maxSeats?: number     **模式级席位上限**（可选）。如 gomoku / weiqi 恒为 2 席（黑/白）。
 //                         主干只读 `world._mode.maxSeats`：有效上限 = min(maxPlayers, 8, maxSeats ?? Infinity)，
 //                         据此在 addPlayer / addAI / canAcceptHuman 处拒绝超额的第 3 席（人类或电脑）。
@@ -53,10 +53,10 @@ export function allModeDefs() {
 
 // ---- 元数据便捷访问器：主干通过这些读取模式能力，不再散落字符串比较 ----
 export function boardMaxForMode(id) {
-  // 已注册模式 → 用其 boardMax（rts 32 / go 100）；
+  // 已注册模式 → 用其 boardMax（rts·go·gomoku·weiqi 均为 128）；
   // 未指定 / 未知模式 → 回宽松上限 100（保持改造前 `mode !== 'rts' → BOARD_MAX` 语义，避免归一化拒绝大盘）。
   const m = ensureModes().get(id);
-  return (m && m.boardMax != null) ? m.boardMax : 100;
+  return (m && m.boardMax != null) ? m.boardMax : 128;
 }
 export function availableVictoryLinesForMode(id) {
   const m = getMode(id);

@@ -486,7 +486,7 @@ const def = {
   label: '标准围棋',
   tickDriver: 'interval',
   intervalMs: 1000,
-  boardMax: WEIQI_SIZE,     // 标准 19×19
+  boardMax: 128,            // 可设 1..128（默认仍 19，见 boardDefault）
   maxSeats: 2,              // 围棋恒为 2 席（黑/白）；主干据此拒绝第 3 席（人类或电脑）
   growLifeLayer: false,
   availableVictoryLines: ['territory'],

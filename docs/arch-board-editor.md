@@ -197,7 +197,7 @@ static SHAPE_PLAY = 1;  // 可落子（形状内）
 static SHAPE_VOID = 2;  // 虚空格（形状内的「墙」）
 static SHAPE_CHARS = { '.': 0, '#': 1, 'x': 2 };
 static SHAPE_CHARS_INV = ['.', '#', 'x'];
-static BOARD_MAX = 100;   // 画布尺寸上限
+static BOARD_MAX = 128;   // 画布尺寸上限
 static BOARD_MIN = 1;
 ```
 

@@ -149,7 +149,7 @@ test('QA-NORM-1 normBoard：w/h 为 0/101/负数/小数/非数字 时钳制或�
   assert.equal(normBoard(mkBoard(0, 4, '####/####/####/####'), 'rts'), null, 'w=0 拒绝（列数与钳后宽不符）');
   assert.equal(normBoard(mkBoard(4, 0, '####/####/####/####'), 'rts'), null, 'h=0 拒绝');
   // 超上限 101：钳到 100，但与 shape 列数不符 → 拒绝
-  assert.equal(normBoard(mkBoard(101, 1, '#'.repeat(101)), 'rts'), null, 'w=101 与列数不符→拒绝');
+  assert.equal(normBoard(mkBoard(200, 1, '#'.repeat(200)), 'rts'), null, 'w=200 钳到 128 与列数不符→拒绝');
   assert.equal(normBoard(mkBoard(1, 101, '###########'), 'rts'), null, 'h=101 与行数不符→拒绝');
   // 负数 → 钳到最小 1（合法当 shape 匹配）
   const neg = normBoard(mkBoard(-5, 3, '#/#/#'), 'rts');
@@ -184,11 +184,11 @@ test('QA-NORM-3 normBoard：board=null 但带 w/h → 忽略 w/h 回 null', () =
   assert.equal(normBoard({ w: 10, h: 10, shape: undefined }, 'rts'), null, 'shape=undefined → 回 null');
 });
 
-test('QA-NORM-4 presetBoard：尺寸钳制到 [1,100]（永不返回 null）', () => {
-  assert.equal(World.presetBoard('rect', 200, 50, 1).w, 100, 'w 超上限钳到 100');
-  assert.equal(World.presetBoard('rect', 100, 100, 1).w, 100, '100×100 合法');
+test('QA-NORM-4 presetBoard：尺寸钳制到 [1,128]（永不返回 null）', () => {
+  assert.equal(World.presetBoard('rect', 200, 50, 1).w, 128, 'w 超上限钳到 128');
+  assert.equal(World.presetBoard('rect', 128, 128, 1).w, 128, '128×128 合法');
   assert.equal(World.presetBoard('rect', 0, 10, 1).w, 1, 'w=0 钳到最小 1（presetBoard 不拒绝）');
-  assert.equal(World.presetBoard('rect', 10, 200, 1).h, 100, 'h 超上限钳到 100');
+  assert.equal(World.presetBoard('rect', 10, 200, 1).h, 128, 'h 超上限钳到 128');
   assert.equal(World.presetBoard('rect', -3, 5, 1).w, 1, '负数尺寸钳到 1（最小）');
   assert.equal(World.presetBoard('rect', 'abc', 5, 1).w, 1, '非数字尺寸钳到 1（presetBoard 不拒绝）');
 });

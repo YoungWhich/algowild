@@ -50,9 +50,9 @@ test('QWA-02 前端注册表（真 ESM import）归一 / 上限 / 默认 / 标�
   assert.equal(normalizeMode('weiqi'), 'weiqi');
   assert.equal(normalizeMode('bogus'), 'rts');
   assert.equal(normalizeMode(''), 'rts');
-  assert.equal(boardMaxForMode('gomoku'), 15);
-  assert.equal(boardMaxForMode('weiqi'), 19);
-  assert.equal(boardMaxForMode('bogus'), 100);          // 未知 → 宽松 100
+  assert.equal(boardMaxForMode('gomoku'), 128);
+  assert.equal(boardMaxForMode('weiqi'), 128);
+  assert.equal(boardMaxForMode('bogus'), 128);          // 未知 → 宽松 128（前后端一致）
   assert.equal(boardDefaultForMode('gomoku'), 15);
   assert.equal(boardDefaultForMode('weiqi'), 19);
   assert.equal(boardDefaultForMode('go'), 32);

@@ -183,7 +183,7 @@ test('WQ-14 注册表：weiqi 已注册（id/驱动/上限/胜利线/归一/清�
   assert.equal(getMode('weiqi').label, '标准围棋');
   assert.equal(getMode('weiqi').tickDriver, 'interval');
   assert.equal(getMode('weiqi').intervalMs, 1000);
-  assert.equal(boardMaxForMode('weiqi'), 19);
+  assert.equal(boardMaxForMode('weiqi'), 128);
   assert.deepEqual(availableVictoryLinesForMode('weiqi'), ['territory']);
   assert.equal(normalizeMode('weiqi'), 'weiqi');
   assert.equal(weiqiDef.id, 'weiqi');
