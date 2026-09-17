@@ -2,6 +2,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { usersRepo } from './db/index.js';
+import { isStaffRole } from './roles.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'algowild-dev-secret-not-for-prod';
 const JWT_EXPIRES = '7d';
@@ -67,12 +68,13 @@ export function isBanActive(user) {
 }
 
 /**
- * 管理员鉴权中间件。假定 authMiddleware 已先行执行（req.user 存在）。
+ * 管理后台鉴权中间件（只读也算后台成员）。假定 authMiddleware 已先行执行（req.user 存在）。
  * 以库中的最新 role 为准，避免旧 token 内嵌 role 失真。
+ * 只读管理员也放行（能看不能改）；player 一律拒绝。改权限另行判定，见 server/roles.js 的层级。
  */
 export function requireAdmin(req, res, next) {
   const u = usersRepo.byIdFull(req.user && req.user.id);
-  if (!u || u.role !== 'admin') {
+  if (!u || !isStaffRole(u.role)) {
     return res.status(403).json({ code: 403, message: 'forbidden', data: null });
   }
   req.me = u; // 内部使用（含 passhash，绝不能出现在响应里）

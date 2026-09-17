@@ -9,24 +9,28 @@
 
 访问地址：**`/admin.html`**（独立页面，与游戏主界面分离）
 
-游戏内入口：侧边栏 `#admin-entry`，**仅在 `user.role === 'admin'` 时显示**，新标签页打开。
+游戏内入口：侧边栏 `#admin-entry`，**账号级角色为管理员 / 只读 / 超管时显示**（`server/roles.js`），新标签页打开。
 
 ## 2. 角色与权限模型
 
-| 角色 | 说明 |
-|---|---|
-| `player` | 默认。普通玩家 |
-| `admin` | 可访问全部 `/api/admin/*` |
+| 角色 | 显示名 | 说明 |
+|---|---|---|
+| `player` | 玩家 | 默认。普通玩家，进不了后台 |
+| `readonly` | 只读 | 可读全部 `/api/admin/*`，**任何变更一律 403** |
+| `admin` | 管理员 | 读 + 全部变更（封禁/解封/踢人/删号/关房/清理），**不能改角色** |
+| `superadmin` | 超管 | 全部权限，**唯一能改他人角色**的层级 |
 
+层级 `player < readonly < admin < superadmin`，判定集中在 `server/roles.js`（角色值存 `users.role`）。
 - 角色存 `users.role`；`requireAdmin` **每次请求都从库里读最新 role**，所以改角色立即生效、无需重新登录。
-- **先不做多级（mod/helper）**，保持简单。
+- 房主（`rooms.ownerId` / `world.hostId`）是**按房间**生效的另一套权限，与这里的账号级角色无关。
 
 ### 管理员从哪来（引导路径）
-1. **空库首个注册账号自动成为管理员**（服务端日志打 `[admin] bootstrap: ...`）。
+1. **空库首个注册账号自动成为 `admin`**（服务端日志打 `[admin] bootstrap: ...`）。
    - 这是为了适配部署沙箱：沙箱里无法设置环境变量，这是唯一可用的引导路径。
    - 一旦库中已有管理员，该通道**永久关闭**，之后注册的都是 `player`。
 2. **`ADMIN_USERNAMES` 环境变量**（逗号分隔）：命中的用户名在**注册与登录时**都强制 `admin`。适合本地/RTS 自建服务器。
-3. **CLI**：`node scripts/admin.mjs grant <username>`（本地文件库，`DB_PATH` 指定）。
+3. **CLI**：`node scripts/admin.mjs grant <username> [player|readonly|admin|superadmin]`（本地文件库，`DB_PATH` 指定；省略角色默认 `admin`）。
+4. **`MASTER_USERNAME` / `MASTER_PASSWORD`**：自举逃生账号，固定 **`superadmin`**；每次启动校验，角色不符会被强制提回。
 
 > ⚠️ 若对外公开且不放心"首个注册者即管理员"，应改用认领码机制 —— 需要额外的分发渠道，目前未实现。
 
@@ -41,7 +45,7 @@
 | GET | `/api/admin/users/:id` | 用户详情 + 其 worlds / rooms / scores 摘要 |
 | POST | `/api/admin/users/:id/ban` | 封禁，body `{ reason, durationHours }`（`0` 或省略 = 永久）；**并立即踢掉其在线 WS 会话** |
 | POST | `/api/admin/users/:id/unban` | 解封 |
-| POST | `/api/admin/users/:id/role` | 改角色 `admin` / `player` |
+| POST | `/api/admin/users/:id/role` | 改角色 `player` / `readonly` / `admin` / `superadmin`；**仅超管可调用**（403 `role_change_forbidden`） |
 | POST | `/api/admin/users/:id/kick` | 仅踢下线，不封禁 |
 | DELETE | `/api/admin/users/:id` | 硬删除，body 必须带 `confirmUsername` 且与目标一致 |
 | GET | `/api/admin/rooms` | 房间列表（含私密房），含席位/人数/模式/房主名 |
@@ -74,9 +78,13 @@
 | 护栏 | 拒绝原因 |
 |---|---|
 | 不能封禁 / 删除 / 降级**自己** | `cannot_target_self` |
-| 不能删除或降级**最后一个管理员** | `last_admin_protected` |
-| **不能直接封禁管理员**（须先降级） | `cannot_ban_admin` |
+| 不能删除或降级**最后一个管理员**（最后一个"能改数据的账号"） | `last_admin_protected` |
+| **不能直接封禁 `admin`**（须先降级） | `cannot_ban_admin` |
 | 删除必须输入用户名确认 | `confirm_username_mismatch` |
+| **只读管理员做任何变更** | `403 readonly_forbidden` |
+| **非超管改他人角色** | `403 role_change_forbidden` |
+| **非超管对超管执行 ban / kick / delete / 降级** | `403 cannot_target_superadmin` |
+| **降级最后一个超管**（即使还有其他管理员） | `last_superadmin_protected` |
 | `passhash` 绝不出现在任何 HTTP 响应 | 独立验证扫了 11 个响应体，0 命中 |
 
 > `cannot_ban_admin` 这条是为了避免死结：被封的管理员自己被锁在外面，且没有任何办法解封自己。
@@ -149,5 +157,6 @@
 ## 12. 已知限制 / 未做
 
 - `onlineUserIds` 只统计**已完成 WS hello 并进入世界**的用户；仅建立连接未进房的不计入在线数。
-- 未做：频次限制（rate limit）、IP 封禁、多级角色、撤销删除（软删除/回收站）、封禁申诉。
+- 未做：频次限制（rate limit）、IP 封禁、撤销删除（软删除/回收站）、封禁申诉。
+- 多级角色已做（超管/管理员/只读，见 §2）；**再细的分级（如分区版主）仍未做**。
 - 未验证：管理界面在真实浏览器中的交互手感（无头环境只能验证接口与静态资源）。

@@ -14,7 +14,7 @@ import express from 'express';
 import http from 'node:http';
 import { WebSocket } from 'ws';
 import { createRouter } from '../server/routes.js';
-import { initDB, usersRepo, worldsRepo, roomsRepo, scoresRepo } from '../server/db/index.js';
+import { initDB, db, usersRepo, worldsRepo, roomsRepo, scoresRepo } from '../server/db/index.js';
 import { loadKernels } from '../server/engine.js';
 import { attachWS } from '../server/net.js';
 
@@ -87,6 +87,12 @@ test('ADM-01 首个注册账号自动成为管理员；第二个为玩家', asyn
   const me = await call('GET', '/me', null, a.token);
   assert.equal(me.body.code, 0);
   assert.equal(me.body.data.role, 'admin');
+
+  // 后续用例需要"能改角色"的身份（改角色端点仅超管可用），
+  // 这里把首个账号提升为 superadmin（等价服务端的 MASTER 自举路径）。
+  // 注意：引导本身给的是 admin，提升发生在断言之后，不影响本用例的语义。
+  usersRepo.setRole(a.user.id, 'superadmin');
+  assert.equal(usersRepo.byId(a.user.id).role, 'superadmin', 'setRole 应能写入超管角色');
 });
 
 // ---------------------------------------------------------------- 2) 非管理员 403
@@ -133,9 +139,12 @@ test('ADM-03 用户列表分页与搜索；结果不含 passhash', async () => {
   assert.equal(byId.body.code, 0);
   assert.ok(byId.body.data.rows.some((u) => u.id === ctx.player.user.id), '按 id 搜索应命中');
 
-  // 过滤 admin
+  // 过滤 admin：返回全部提权角色（此时系统里只有超管）
   const adm = await call('GET', '/admin/users?filter=admin', null, ctx.admin.token);
-  assert.ok(adm.body.data.rows.every((u) => u.role === 'admin'), 'filter=admin 只返回管理员');
+  assert.equal(adm.body.code, 0);
+  assert.ok(adm.body.data.rows.length >= 1, 'filter=admin 应命中提权账号');
+  assert.ok(adm.body.data.rows.every((u) => ['admin', 'readonly', 'superadmin'].includes(u.role)),
+    'filter=admin 只返回提权角色（管理员 / 只读 / 超管）');
 });
 
 // ---------------------------------------------------------------- 4) 封禁全链路
@@ -212,9 +221,10 @@ test('ADM-07 护栏：封禁自己 / 删除自己 / 降级最后一个管理员'
   assert.equal(delSelf.body.code, 400, '删除自己应拒绝');
   assert.equal(delSelf.body.message, 'cannot_target_self');
 
-  // 此时系统内唯一管理员就是 admin → 降级应被 last_admin_protected 拒绝
+  // 此时系统内唯一可写管理员就是 ctx.admin（超管）→ 降级应被 last_admin_protected 拒绝
   const cnt = usersRepo.count();
-  assert.equal(cnt.admins, 1, '此刻应只有 1 个管理员');
+  assert.equal(cnt.admins, 1, '此刻应只有 1 个可写管理员（超管计入 admins）');
+  assert.equal(cnt.superadmins, 1, '此刻应只有 1 个超管');
   const demote = await call('POST', `/admin/users/${aid}/role`, { role: 'player' }, ctx.admin.token);
   assert.equal(demote.body.code, 400, '降级最后一个管理员应拒绝');
   assert.equal(demote.body.message, 'last_admin_protected');
@@ -318,9 +328,233 @@ test('ADM-11 封禁 role===admin 的用户 → cannot_ban_admin；该管理员�
   assert.equal(lg.body.code, 0, '管理员不应被封，仍可登录');
   assert.equal(lg.body.data.user.role, 'admin');
 
-  // 被拒动作不写审计：审计里不应出现"目标=该管理员 且 动作=ban"的记录
+// 被拒动作不写审计：审计里不应出现"目标=该管理员 且 动作=ban"的记录
   const acts = await call('GET', '/admin/actions?limit=200', null, ctx.admin.token);
   const bannedAdminLogged = acts.body.data.rows.some((a) => a.action === 'ban' && a.target_name === a2.user.username);
   assert.equal(bannedAdminLogged, false, '被拒的封禁不应写审计');
+});
+
+// ============================================================ 账号级角色分级（player < readonly < admin < superadmin）
+const ROLE_CTX = { readonly: null };
+
+/** 由超管把某账号设为指定角色。 */
+async function setRole(targetId, role, token) {
+  return call('POST', `/admin/users/${targetId}/role`, { role }, token);
+}
+
+// ---------------------------------------------------------------- 12) 角色白名单（仓储层）
+test('ADM-12 usersRepo.setRole 接受 4 个合法角色；非法值回落 player', () => {
+  const u = usersRepo.byId(ctx.player.user.id);
+  for (const r of ['player', 'readonly', 'admin', 'superadmin']) {
+    usersRepo.setRole(u.id, r);
+    assert.equal(usersRepo.byId(u.id).role, r, `setRole 应写入 ${r}`);
+  }
+  for (const bad of ['root', '', null, undefined, 42, { r: 'admin' }]) {
+    usersRepo.setRole(u.id, bad);
+    assert.equal(usersRepo.byId(u.id).role, 'player', `非法角色 ${String(bad)} 应回落 player`);
+  }
+  // admins 统计含 superadmin，superadmins 单独一项
+  const before = usersRepo.count();
+  usersRepo.setRole(u.id, 'superadmin');
+  const after = usersRepo.count();
+  assert.equal(after.admins, before.admins + 1, '超管应计入 admins（否则"最后一个管理员"保护会失效）');
+  assert.equal(after.superadmins, before.superadmins + 1, '超管应计入 superadmins');
+  usersRepo.setRole(u.id, 'player');
+});
+
+// ---------------------------------------------------------------- 13) 只读管理员：读全通
+test('ADM-13 readonly 可读全部只读端点（overview/users/user/rooms/actions/maintenance）', async () => {
+  const ro = await register(uName('readonlyAdmin'));
+  const promo = await setRole(ro.user.id, 'readonly', ctx.admin.token);
+  assert.equal(promo.body.code, 0, '超管应能把账号设为只读');
+  ROLE_CTX.readonly = ro;
+
+  const reads = [
+    ['GET', '/admin/overview'],
+    ['GET', '/admin/users'],
+    ['GET', `/admin/users/${ctx.player.user.id}`],
+    ['GET', '/admin/rooms'],
+    ['GET', '/admin/actions'],
+    ['GET', '/admin/maintenance'],
+  ];
+  for (const [m, p] of reads) {
+    const r = await call(m, p, null, ro.token);
+    assert.equal(r.body.code, 0, `readonly 应能读 ${m} ${p}，实际 ${JSON.stringify(r.body)}`);
+  }
+});
+
+// ---------------------------------------------------------------- 14) 只读管理员：写全拒
+test('ADM-14 readonly 对所有变更端点一律 403 readonly_forbidden', async () => {
+  const victim = await register(uName('roTarget'));
+  const ro = ROLE_CTX.readonly;
+  const rm = await call('POST', '/rooms', { name: 'ro房', maxPlayers: 4 }, victim.token);
+  const code = rm.body.data.code;
+
+  const writes = [
+    ['POST', `/admin/users/${victim.user.id}/ban`, { reason: 'x' }],
+    ['POST', `/admin/users/${victim.user.id}/unban`, {}],
+    ['POST', `/admin/users/${victim.user.id}/kick`, {}],
+    ['POST', `/admin/users/${victim.user.id}/role`, { role: 'admin' }],
+    ['DELETE', `/admin/users/${victim.user.id}`, { confirmUsername: victim.user.username }],
+    ['POST', `/admin/rooms/${code}/close`, {}],
+    ['POST', '/admin/maintenance/inactive-days', { days: 30 }],
+    ['POST', '/admin/maintenance/purge', {}],
+  ];
+  for (const [m, p, body] of writes) {
+    const r = await call(m, p, body, ro.token);
+    assert.equal(r.status, 403, `${m} ${p} 应对 readonly 返回 403，实际 ${r.status}`);
+    assert.equal(r.body.code, 403, `${m} ${p} body.code 应为 403`);
+    assert.equal(r.body.message, 'readonly_forbidden', `${m} ${p} message 应为 readonly_forbidden`);
+  }
+  // 确认没有副作用：目标账号仍在、未被封、未被删，房间也没被关
+  const still = usersRepo.byId(victim.user.id);
+  assert.ok(still, '被拒操作后用户应仍存在');
+  assert.equal(still.banned, 0, 'readonly 的封禁不应生效');
+  assert.equal(still.role, 'player', 'readonly 的改角色不应生效');
+  const rooms = await call('GET', '/admin/rooms', null, ctx.admin.token);
+  assert.ok(rooms.body.data.rooms.some((x) => x.code === code), '房间不应被 readonly 关闭');
+});
+
+// ---------------------------------------------------------------- 15) 管理员：能写 / 不能改角色 / 不能碰超管
+test('ADM-15 admin 可写但不能改角色；对超管 ban/kick/delete/降级 一律 403', async () => {
+  const ad = await register(uName('plainAdmin'));
+  assert.equal((await setRole(ad.user.id, 'admin', ctx.admin.token)).body.code, 0);
+  const target = await register(uName('adminTarget'));
+
+  // 能写：封禁一个普通玩家应成功（随后解封复原）
+  const ban = await call('POST', `/admin/users/${target.user.id}/ban`, { reason: 'ok' }, ad.token);
+  assert.equal(ban.body.code, 0, '管理员应能封禁普通玩家');
+  assert.equal((await call('POST', `/admin/users/${target.user.id}/unban`, {}, ad.token)).body.code, 0);
+
+  // 不能改角色（含给自己提权）
+  for (const id of [target.user.id, ad.user.id]) {
+    const r = await setRole(id, 'admin', ad.token);
+    assert.equal(r.status, 403, `管理员改角色 ${id} 应 403`);
+    assert.equal(r.body.message, 'role_change_forbidden', '非超管改角色应为 role_change_forbidden');
+  }
+  assert.equal(usersRepo.byId(target.user.id).role, 'player', '管理员的改角色不应生效');
+
+  // 不能碰超管：ban / kick / delete / 降级
+  const saId = ctx.admin.user.id;
+  const banSa = await call('POST', `/admin/users/${saId}/ban`, { reason: 'x' }, ad.token);
+  assert.equal(banSa.status, 403);
+  assert.equal(banSa.body.message, 'cannot_target_superadmin', '管理员封禁超管应 cannot_target_superadmin');
+  const kickSa = await call('POST', `/admin/users/${saId}/kick`, {}, ad.token);
+  assert.equal(kickSa.status, 403);
+  assert.equal(kickSa.body.message, 'cannot_target_superadmin');
+  const delSa = await call('DELETE', `/admin/users/${saId}`, { confirmUsername: ctx.admin.user.username }, ad.token);
+  assert.equal(delSa.status, 403);
+  assert.equal(delSa.body.message, 'cannot_target_superadmin');
+  const demoteSa = await setRole(saId, 'readonly', ad.token);
+  assert.equal(demoteSa.status, 403);
+  assert.equal(demoteSa.body.message, 'cannot_target_superadmin');
+  assert.ok(usersRepo.byId(saId), '超管账号不应被管理员删掉');
+  assert.equal(usersRepo.byId(saId).role, 'superadmin', '超管角色不应被管理员改动');
+});
+
+// ---------------------------------------------------------------- 16) 超管：改角色 + 最后一个超管保护
+test('ADM-16 超管能改出 4 种角色；最后一个超管不可被降级', async () => {
+  const p = await register(uName('roleCycle'));
+  const pid = p.user.id;
+  for (const r of ['readonly', 'admin', 'superadmin', 'player']) {
+    const res = await setRole(pid, r, ctx.admin.token);
+    assert.equal(res.body.code, 0, `超管应能设为 ${r}：${JSON.stringify(res.body)}`);
+    assert.equal(res.body.data.role, r);
+    assert.equal(usersRepo.byId(pid).role, r, `库里应落地 ${r}`);
+  }
+  // 非法值 → 400 bad_role
+  const bad = await setRole(pid, 'root', ctx.admin.token);
+  assert.equal(bad.body.code, 400);
+  assert.equal(bad.body.message, 'bad_role');
+
+  // 最后一个超管 self 降级 → last_superadmin_protected（此时还有别的 admin，故不是 last_admin_protected）
+  assert.ok(usersRepo.count().admins >= 2, '此刻应存在其他可写管理员，才能单独验证超管保护');
+  for (const r of ['admin', 'readonly', 'player']) {
+    const res = await setRole(ctx.admin.user.id, r, ctx.admin.token);
+    assert.equal(res.body.code, 400, `降级最后一个超管到 ${r} 应被拒绝`);
+    assert.equal(res.body.message, 'last_superadmin_protected');
+  }
+  assert.equal(usersRepo.byId(ctx.admin.user.id).role, 'superadmin', '最后一个超管角色应保持不变');
+
+  // 有两个超管时，降级其中一个是允许的（保护的是"最后一个"，不是一刀切）
+  const sa2 = await register(uName('secondSa'));
+  assert.equal((await setRole(sa2.user.id, 'superadmin', ctx.admin.token)).body.code, 0);
+  assert.ok(usersRepo.count().superadmins >= 2);
+  assert.equal((await setRole(sa2.user.id, 'player', ctx.admin.token)).body.code, 0, '存在多个超管时可降级其中一个');
+  assert.equal(usersRepo.byId(sa2.user.id).role, 'player');
+});
+
+// ---------------------------------------------------------------- 17) 旧/未知角色值按玩家处理
+test('ADM-17 未知角色值按玩家处理：无后台权限，且仍可被超管改回合法角色', async () => {
+  const legacy = await register(uName('legacyRole'));
+  // 直接写库模拟历史脏数据
+  usersRepo.setRole(legacy.user.id, 'player');
+  db().run('UPDATE users SET role=? WHERE id=?', ['moderator', legacy.user.id]);
+  assert.equal(usersRepo.byId(legacy.user.id).role, 'moderator', '脏数据应原样读回');
+
+  const r = await call('GET', '/admin/overview', null, legacy.token);
+  assert.equal(r.status, 403, '未知角色应视为普通玩家 → 403');
+  assert.equal(r.body.code, 403);
+
+  // 超管仍可把它改成合法角色（不会卡死），随后复原为玩家
+  assert.equal((await setRole(legacy.user.id, 'readonly', ctx.admin.token)).body.code, 0);
+  assert.equal(usersRepo.byId(legacy.user.id).role, 'readonly');
+  assert.equal((await setRole(legacy.user.id, 'player', ctx.admin.token)).body.code, 0);
+});
+
+// ---------------------------------------------------------------- 19) 不活跃清理不碰提权账号
+test('ADM-18 不活跃清理候选排除全部提权账号（只读 / 管理员 / 超管都不会被清理）', () => {
+  const DAY = 24 * 3600 * 1000;
+  const now = Date.now();
+  const old = now - 200 * DAY;
+  const mk = (prefix, role) => {
+    const name = uName(prefix);
+    usersRepo.create(name, null, 'x');
+    db().run('UPDATE users SET created_at=?, last_login=? WHERE username=?', [old, old, name]);
+    const u = usersRepo.byUsername(name);
+    if (role) usersRepo.setRole(u.id, role);
+    return name;
+  };
+  const plain = mk('inactivePlain', null);
+  const ro = mk('inactiveReadonly', 'readonly');
+  const ad = mk('inactiveAdmin', 'admin');
+  const sa = mk('inactiveSuperadmin', 'superadmin');
+
+  const cands = usersRepo.listInactive(now - 30 * DAY).map((r) => r.username);
+  assert.ok(cands.includes(plain), '不活跃普通玩家应在候选里');
+  assert.ok(!cands.includes(ro), '只读管理员不应被清理');
+  assert.ok(!cands.includes(ad), '管理员不应被清理');
+  assert.ok(!cands.includes(sa), '超管不应被清理');
+});
+
+// ---------------------------------------------------------------- 19) MASTER 自举 = superadmin
+test('ADM-19 MASTER_USERNAME 自举账号为 superadmin（含已存在账号的强制提回）', async () => {
+  const prevName = process.env.MASTER_USERNAME;
+  const prevPass = process.env.MASTER_PASSWORD;
+  const prevNoStart = process.env.ALGOWILD_NO_AUTOSTART;
+  const masterName = uName('masterBoot');
+  process.env.ALGOWILD_NO_AUTOSTART = '1';   // 只导入不拉起 HTTP / WS
+  process.env.MASTER_USERNAME = masterName;
+  process.env.MASTER_PASSWORD = 'MasterPass123';
+  try {
+    const { bootstrapMaster } = await import('../server/index.js');
+    await bootstrapMaster();
+    const created = usersRepo.byUsername(masterName);
+    assert.ok(created, '自举应创建 master 账号');
+    assert.equal(created.role, 'superadmin', 'MASTER 自举账号应为 superadmin');
+
+    const lg = await call('POST', '/auth/login', { username: masterName, password: 'MasterPass123' });
+    assert.equal(lg.body.code, 0, '自举账号应能用 MASTER_PASSWORD 登录');
+    assert.equal(lg.body.data.user.role, 'superadmin', '登录应带回 superadmin');
+
+    // 被降级后再次自举 → 强制提回 superadmin
+    usersRepo.setRole(created.id, 'admin');
+    await bootstrapMaster();
+    assert.equal(usersRepo.byUsername(masterName).role, 'superadmin', '角色不符时应被强制提回');
+  } finally {
+    if (prevName === undefined) delete process.env.MASTER_USERNAME; else process.env.MASTER_USERNAME = prevName;
+    if (prevPass === undefined) delete process.env.MASTER_PASSWORD; else process.env.MASTER_PASSWORD = prevPass;
+    if (prevNoStart === undefined) delete process.env.ALGOWILD_NO_AUTOSTART; else process.env.ALGOWILD_NO_AUTOSTART = prevNoStart;
+  }
 });
 

@@ -3753,9 +3753,11 @@ function onLogin() {
   $('world-panel').style.display = 'block';
   $('me-name').textContent = state.user.username;
   $('me-id').textContent = state.user.id;
-  // 管理员入口：仅 role==='admin' 显示（新标签页打开独立管理页）
+  // 管理员入口：角色为管理员 / 只读 / 超管时显示（新标签页打开独立管理页）
   const adminEntry = $('admin-entry');
-  if (adminEntry) adminEntry.style.display = (state.user && state.user.role === 'admin') ? 'flex' : 'none';
+  if (adminEntry) adminEntry.style.display = (state.user && (
+    state.user.role === 'admin' || state.user.role === 'superadmin' || state.user.role === 'readonly'
+  )) ? 'flex' : 'none';
   $('hud').innerHTML = '已登录 · <span style="color:#58a6ff">等简报…</span>';
   // 若通过他人分享的永久链接进入，登录后立即加入该房间
   const params = new URLSearchParams(location.search);

@@ -9,6 +9,30 @@ const $ = (id) => document.getElementById(id);
 // 当前登录管理员（/api/me 取回）
 let me = null;
 
+// 账号级角色层级：player < readonly < admin < superadmin（与 server/roles.js 一致）
+const ROLE_LABEL = { superadmin: '超管', admin: '管理员', readonly: '只读', player: '玩家' };
+const ROLE_RANK = { player: 0, readonly: 1, admin: 2, superadmin: 3 };
+const roleName = (r) => ROLE_LABEL[r] || '玩家';
+const myRole = () => (me && me.role) || 'player';
+const rankOf = (r) => ROLE_RANK[r] || 0;
+const isStaff = (r) => rankOf(r) >= 1;      // 可进后台（含只读管理员）
+const canWrite = () => rankOf(myRole()) >= 2;   // 可改数据（管理员 / 超管）
+const canSetRole = () => rankOf(myRole()) >= 3; // 仅超管可调整角色
+
+// 服务端英文错误码 → 中文提示（成年人语域，不加修饰词）
+const ERR_TEXT = {
+  readonly_forbidden: '只读管理员无此权限',
+  role_change_forbidden: '仅超管可调整角色',
+  cannot_target_superadmin: '不可对超管账号执行此操作',
+  last_superadmin_protected: '系统必须保留至少一个超管',
+  last_admin_protected: '系统必须保留至少一个管理员',
+  cannot_target_self: '不能对自己执行该操作',
+  cannot_ban_admin: '管理员不可直接封禁，需先降级',
+  bad_role: '角色值非法',
+  confirm_username_mismatch: '用户名不一致',
+};
+const errText = (e) => ERR_TEXT[(e && e.message) || ''] || ((e && e.message) || '操作失败');
+
 const state = {
   tab: 'overview',
   users: { page: 1, pageSize: 20, filter: 'all', q: '', total: 0, rows: [] },
@@ -129,7 +153,7 @@ function switchTab(tab) {
   state.tab = tab;
   for (const b of $('tabs').querySelectorAll('button')) b.classList.toggle('active', b.dataset.tab === tab);
   for (const s of document.querySelectorAll('.section')) s.classList.toggle('active', s.dataset.sec === tab);
-  loadTab(tab).catch((e) => toast(e.message, 'error'));
+  loadTab(tab).catch((e) => toast(errText(e), 'error'));
 }
 
 async function loadTab(tab) {
@@ -148,6 +172,8 @@ async function renderMaintenance() {
   const pv = d.preview || { count: 0, candidates: [], disabled: false };
   const last = d.lastPurgeAt ? fmtTime(d.lastPurgeAt) : '从未';
   $('m-info').innerHTML = `当前阈值：<b>${d.inactiveDays}</b> 天${d.inactiveDays === 0 ? '（已关闭自动清理）' : ''}　·　上次清理：${esc(last)}　·　待清理：<b>${pv.count}</b> 个`;
+  // 只读管理员只能看预演，动不了阈值与清理开关
+  for (const el of [$('m-save'), $('m-purge')]) { if (el) el.style.display = canWrite() ? '' : 'none'; }
   if (!pv.candidates || !pv.candidates.length) {
     $('m-preview').innerHTML = '<div class="empty">没有符合条件的不活跃账号</div>';
     return;
@@ -213,10 +239,11 @@ async function renderUsers() {
   if (!rows.length) {
     table.innerHTML = '<div class="empty">没有匹配的用户</div>';
   } else {
+    const writable = canWrite();
     const body = rows.map((u) => {
       const isSelf = me && me.id === u.id;
-      const roleTag = u.role === 'admin'
-        ? '<span class="tag admin">管理员</span>'
+      const roleTag = isStaff(u.role)
+        ? `<span class="tag ${u.role === 'superadmin' ? 'super' : (u.role === 'readonly' ? 'readonly' : 'admin')}">${esc(roleName(u.role))}</span>`
         : '<span class="tag player">玩家</span>';
       let banTag;
       if (!u.banned) banTag = '<span class="tag normal">正常</span>';
@@ -225,18 +252,16 @@ async function renderUsers() {
         banTag = `<span class="tag banned" title="${esc(u.ban_reason || '')}">已封禁${forever ? '·永久' : '·至' + esc(fmtTime(u.banned_until))}</span>`;
       }
       const acts = [];
-      if (!isSelf) {
+      if (writable && !isSelf) {
         if (u.banned) acts.push(`<button class="ghost" data-act="unban" data-id="${u.id}" data-name="${esc(u.username)}">解封</button>`);
         else acts.push(`<button class="ghost warn" data-act="ban" data-id="${u.id}" data-name="${esc(u.username)}">封禁</button>`);
       }
-      acts.push(`<button class="ghost" data-act="kick" data-id="${u.id}" data-name="${esc(u.username)}">踢下线</button>`);
+      if (writable) acts.push(`<button class="ghost" data-act="kick" data-id="${u.id}" data-name="${esc(u.username)}">踢下线</button>`);
       if (!isSelf) {
-        if (u.role === 'admin') acts.push(`<button class="ghost" data-act="demote" data-id="${u.id}" data-name="${esc(u.username)}">取消管理员</button>`);
-        else acts.push(`<button class="ghost" data-act="promote" data-id="${u.id}" data-name="${esc(u.username)}">设为管理员</button>`);
-        acts.push(`<button class="ghost danger" data-act="delete" data-id="${u.id}" data-name="${esc(u.username)}">删除</button>`);
-      } else {
-        acts.push('<span class="muted" style="font-size:11px">（当前账号）</span>');
+        if (canSetRole()) acts.push(`<button class="ghost" data-act="setrole" data-id="${u.id}" data-name="${esc(u.username)}" data-role="${esc(u.role || 'player')}">改角色</button>`);
+        if (writable) acts.push(`<button class="ghost danger" data-act="delete" data-id="${u.id}" data-name="${esc(u.username)}">删除</button>`);
       }
+      if (isSelf || !acts.length) acts.push('<span class="muted" style="font-size:11px">（当前账号）</span>');
       return `<tr>
         <td>${u.id}</td>
         <td data-uid="${u.id}" style="cursor:pointer;color:#58a6ff">${esc(u.username)}</td>
@@ -259,7 +284,7 @@ async function renderUsers() {
   $('u-next').disabled = s.page >= maxPage;
 }
 
-async function userAction(act, id, name) {
+async function userAction(act, id, name, curRole) {
   id = Number(id);
   try {
     if (act === 'ban') {
@@ -287,12 +312,23 @@ async function userAction(act, id, name) {
       if (!v) return;
       const d = await api('POST', `/api/admin/users/${id}/kick`, {});
       toast(`已踢下线 ${name}（断开 ${d.kicked} 个会话）`);
-    } else if (act === 'promote') {
-      await api('POST', `/api/admin/users/${id}/role`, { role: 'admin' });
-      toast(`已将 ${name} 设为管理员`);
-    } else if (act === 'demote') {
-      await api('POST', `/api/admin/users/${id}/role`, { role: 'player' });
-      toast(`已取消 ${name} 的管理员身份`);
+    } else if (act === 'setrole') {
+      const cur = curRole || 'player';
+      const v = await dialog({
+        title: `调整 ${name} 的角色`,
+        okText: '保存',
+        fields: [{
+          key: 'role', label: '角色', type: 'select', value: cur, options: [
+            { value: 'player', label: '玩家' },
+            { value: 'readonly', label: '只读' },
+            { value: 'admin', label: '管理员' },
+            { value: 'superadmin', label: '超管' },
+          ],
+        }],
+      });
+      if (!v) return;
+      const d = await api('POST', `/api/admin/users/${id}/role`, { role: v.role });
+      toast(`已将 ${name} 设为${roleName(d.role)}`);
     } else if (act === 'delete') {
       const v = await dialog({
         title: `删除用户 ${name}`,
@@ -307,7 +343,7 @@ async function userAction(act, id, name) {
     await renderUsers();
     if (state.tab === 'overview') await renderOverview();
   } catch (e) {
-    toast(e.message, 'error');
+    toast(errText(e), 'error');
   }
 }
 
@@ -342,7 +378,7 @@ async function renderRooms() {
       <td>${r.humanCount}H / ${r.aiCount}AI</td>
       <td>${esc(r.phase)}</td>
       <td>${esc(r.ownerName || ('#' + r.ownerId))}</td>
-      <td><button class="ghost danger" data-close="${esc(r.code)}">强制关房</button></td>
+      <td>${canWrite() ? `<button class="ghost danger" data-close="${esc(r.code)}">强制关房</button>` : '<span class="muted" style="font-size:11px">只读</span>'}</td>
     </tr>`).join('')}</tbody></table>`;
 }
 
@@ -374,11 +410,11 @@ $('tabs').addEventListener('click', (ev) => {
   if (b) switchTab(b.dataset.tab);
 });
 
-$('overview-refresh').onclick = () => renderOverview().catch((e) => toast(e.message, 'error'));
-$('online-refresh').onclick = () => renderOnline().catch((e) => toast(e.message, 'error'));
-$('rooms-refresh').onclick = () => renderRooms().catch((e) => toast(e.message, 'error'));
-$('actions-refresh').onclick = () => renderActions().catch((e) => toast(e.message, 'error'));
-$('m-refresh').onclick = () => renderMaintenance().catch((e) => toast(e.message, 'error'));
+$('overview-refresh').onclick = () => renderOverview().catch((e) => toast(errText(e), 'error'));
+$('online-refresh').onclick = () => renderOnline().catch((e) => toast(errText(e), 'error'));
+$('rooms-refresh').onclick = () => renderRooms().catch((e) => toast(errText(e), 'error'));
+$('actions-refresh').onclick = () => renderActions().catch((e) => toast(errText(e), 'error'));
+$('m-refresh').onclick = () => renderMaintenance().catch((e) => toast(errText(e), 'error'));
 $('m-save').onclick = async () => {
   try {
     const days = parseInt($('m-days').value, 10);
@@ -386,7 +422,7 @@ $('m-save').onclick = async () => {
     const d = await api('POST', '/api/admin/maintenance/inactive-days', { days });
     toast(`已保存：不活跃阈值 = ${d.inactiveDays} 天`);
     await renderMaintenance();
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(errText(e), 'error'); }
 };
 $('m-purge').onclick = async () => {
   const v = await dialog({ title: '立即清理一次不活跃账号？', okText: '执行清理', danger: true, fields: [] });
@@ -396,7 +432,7 @@ $('m-purge').onclick = async () => {
     if (d.disabled) toast('自动清理已关闭（阈值 0），未执行', 'warn');
     else toast(`已清理 ${d.removedCount} 个不活跃账号`);
     await renderMaintenance();
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(errText(e), 'error'); }
 };
 
 $('u-search').onclick = () => {
@@ -404,20 +440,20 @@ $('u-search').onclick = () => {
   state.users.filter = $('u-filter').value;
   state.users.pageSize = parseInt($('u-pageSize').value, 10) || 20;
   state.users.page = 1;
-  renderUsers().catch((e) => toast(e.message, 'error'));
+  renderUsers().catch((e) => toast(errText(e), 'error'));
 };
 $('u-q').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('u-search').click(); });
 $('u-filter').onchange = () => $('u-search').click();
 $('u-pageSize').onchange = () => $('u-search').click();
-$('u-prev').onclick = () => { if (state.users.page > 1) { state.users.page--; renderUsers().catch((e) => toast(e.message, 'error')); } };
-$('u-next').onclick = () => { state.users.page++; renderUsers().catch((e) => toast(e.message, 'error')); };
+$('u-prev').onclick = () => { if (state.users.page > 1) { state.users.page--; renderUsers().catch((e) => toast(errText(e), 'error')); } };
+$('u-next').onclick = () => { state.users.page++; renderUsers().catch((e) => toast(errText(e), 'error')); };
 
 $('u-table-wrap').addEventListener('click', (ev) => {
   const b = ev.target.closest('button[data-act]');
-  if (b) userAction(b.dataset.act, b.dataset.id, b.dataset.name);
+  if (b) userAction(b.dataset.act, b.dataset.id, b.dataset.name, b.dataset.role);
   // 点击用户名 → 查看详情
   const cell = ev.target.closest('td[data-uid]');
-  if (cell) showUserDetail(cell.dataset.uid).catch((e) => toast(e.message, 'error'));
+  if (cell) showUserDetail(cell.dataset.uid).catch((e) => toast(errText(e), 'error'));
 });
 $('online-wrap').addEventListener('click', async (ev) => {
   const b = ev.target.closest('button[data-kick]');
@@ -428,7 +464,7 @@ $('online-wrap').addEventListener('click', async (ev) => {
     const d = await api('POST', `/api/admin/users/${b.dataset.kick}/kick`, {});
     toast(`已踢下线 ${b.dataset.name}（断开 ${d.kicked} 个会话）`);
     await renderOnline();
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(errText(e), 'error'); }
 });
 $('rooms-wrap').addEventListener('click', async (ev) => {
   const b = ev.target.closest('button[data-close]');
@@ -439,14 +475,14 @@ $('rooms-wrap').addEventListener('click', async (ev) => {
     const d = await api('POST', `/api/admin/rooms/${encodeURIComponent(b.dataset.close)}/close`, {});
     toast(`已关闭房间 ${b.dataset.close}（断开 ${d.kicked} 个会话）`);
     await renderRooms();
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(errText(e), 'error'); }
 });
 
 async function showUserDetail(id) {
   const d = await api('GET', `/api/admin/users/${id}`);
   const u = d.user;
   const body = `
-    <div class="field"><label>用户</label><div>#${u.id} ${esc(u.username)} · ${u.role === 'admin' ? '管理员' : '玩家'}</div></div>
+    <div class="field"><label>用户</label><div>#${u.id} ${esc(u.username)} · ${esc(roleName(u.role))}</div></div>
     <div class="field"><label>状态</label><div>${u.banned ? ('已封禁' + (u.banned_until ? ' 至 ' + esc(fmtTime(u.banned_until)) : '（永久）') + (u.ban_reason ? ' · ' + esc(u.ban_reason) : '')) : '正常'}</div></div>
     <div class="field"><label>注册 / 最近登录</label><div class="muted">${esc(fmtTime(u.created_at))} / ${esc(fmtTime(u.last_login))}</div></div>
     <div class="field"><label>世界 (${d.worlds.length})</label><div class="muted">${d.worlds.map((w) => esc(w.name)).join('、') || '—'}</div></div>
@@ -494,12 +530,12 @@ async function boot() {
     $('gate-body').innerHTML = (e.status === 4004 ? '账号已被封禁。' : '凭证无效或已过期。') + ' 请前往 <a class="link" href="/">游戏首页</a> 重新登录。';
     return;
   }
-  if (!me || me.role !== 'admin') {
+  if (!me || !isStaff(me.role)) {
     $('gate-title').textContent = '无权限';
     $('gate-body').innerHTML = '当前账号不是管理员，无法访问管理后台。';
     return;
   }
-  $('who').innerHTML = `已登录：<b>${esc(me.username)}</b>（管理员）`;
+  $('who').innerHTML = `已登录：<b>${esc(me.username)}</b>（${esc(roleName(me.role))}）`;
   $('gate').style.display = 'none';
   $('tabs').style.display = 'flex';
   $('content').style.display = 'block';

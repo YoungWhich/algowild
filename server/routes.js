@@ -15,6 +15,7 @@ import {
   normVictoryLines, normVictoryThresholds, normBoard, normGoLimits, setRoomSettings,
 } from './rooms.js';
 import { normalizeMode } from './modes/index.js';
+import { ROLES, normalizeRole, isWriterRole, isSuperadmin, roleLabel } from './roles.js';
 import {
   getInactiveDays, setInactiveDays, previewInactive, runInactivePurge, lastPurgeAt,
   DEFAULT_INACTIVE_DAYS, MAX_INACTIVE_DAYS,
@@ -599,14 +600,61 @@ export function createRouter() {
   });
 
   // ============== ADMIN（管理员 / 开发者控制台） ==============
-  // 所有端点都需 authMiddleware + requireAdmin（库里 role==='admin' 才放行）
-  // + adminSourceGuard（来源限制：默认仅本机，见文件顶部「管理员来源限制」说明）。
+  // 所有端点都需 authMiddleware + requireAdmin（库里为提权角色才放行：
+  // readonly / admin / superadmin，见 server/roles.js）+ adminSourceGuard
+  //（来源限制：默认仅本机，见文件顶部「管理员来源限制」说明）。
+  // 在此之上按三档再叠一层角色守卫：
+  //   adminRead  —— 只读端点：三种角色都能进
+  //   adminWrite —— 变更端点（ban/unban/kick/delete/关房/账号维护）：readonly → 403
+  //   adminRole  —— 改角色：仅 superadmin（防止平级管理员互相降级/夺权）
   function adminSourceGuard(req, res, next) {
     const chk = checkAdminSource(req);
     if (!chk.ok) return res.json({ code: 403, message: 'admin_restricted', data: chk });
     next();
   }
-  const admin = [authMiddleware, requireAdmin, adminSourceGuard];
+  const adminRead = [authMiddleware, requireAdmin, adminSourceGuard];
+  const admin = adminRead;
+
+  /** 统一 403 响应（HTTP 状态与 body.code 同为 403）。 */
+  function deny403(res, message) {
+    return res.status(403).json({ code: 403, message, data: null });
+  }
+  /** 操作者当前角色（库里最新值；req.me 由 requireAdmin 装载）。 */
+  function myRole(req) { return normalizeRole(req.me && req.me.role); }
+
+  /** 写权限守卫：只读管理员（readonly）一律拦在变更端点之外。 */
+  function requireWrite(req, res, next) {
+    if (!isWriterRole(myRole(req))) return deny403(res, 'readonly_forbidden');
+    next();
+  }
+  /** 改角色守卫：仅超管。目标是超管时给更明确的 cannot_target_superadmin（同为 403）。 */
+  function requireRoleAdmin(req, res, next) {
+    if (!isSuperadmin(myRole(req))) {
+      const tid = parseInt(req.params && req.params.id, 10);
+      const t = Number.isFinite(tid) ? usersRepo.byId(tid) : null;
+      if (t && isSuperadmin(t.role)) return deny403(res, 'cannot_target_superadmin');
+      return deny403(res, 'role_change_forbidden');
+    }
+    next();
+  }
+  const adminWrite = [authMiddleware, requireAdmin, adminSourceGuard, requireWrite];
+  // 改角色：先挡只读（readonly_forbidden），再挡非超管（role_change_forbidden）
+  const adminRole = [authMiddleware, requireAdmin, adminSourceGuard, requireWrite, requireRoleAdmin];
+
+  /**
+   * 超管目标保护：非超管不得对 superadmin 账号执行 ban / kick / delete / 降级；
+   * 最后一个超管则连超管本人也不能动（否则再无人能授予/回收角色）。
+   * @returns {boolean} true = 已写入响应，调用方应立即 return
+   */
+  function superadminTargetBlocked(req, res, target) {
+    if (!target || !isSuperadmin(target.role)) return false;
+    if (!isSuperadmin(myRole(req))) { deny403(res, 'cannot_target_superadmin'); return true; }
+    if (usersRepo.count().superadmins <= 1) {
+      res.json({ code: 400, message: 'last_superadmin_protected', data: null });
+      return true;
+    }
+    return false;
+  }
 
   function logAdmin(req, action, targetId, targetName, detail) {
     adminRepo.log({
@@ -627,6 +675,7 @@ export function createRouter() {
   function publicUserView(u) {
     return {
       id: u.id, username: u.username, email: u.email || null, role: u.role || 'player',
+      roleLabel: roleLabel(u.role),
       banned: !!u.banned, ban_reason: u.ban_reason || null,
       banned_at: u.banned_at || null, banned_until: u.banned_until || 0,
       created_at: u.created_at, last_login: u.last_login || null,
@@ -700,11 +749,12 @@ export function createRouter() {
   });
 
   // D4 封禁（并立即踢下线所有在线会话）
-  router.post('/admin/users/:id/ban', admin, (req, res) => {
+  router.post('/admin/users/:id/ban', adminWrite, (req, res) => {
     const id = parseInt(req.params.id, 10);
     const target = usersRepo.byId(id);
     if (!target) return res.json({ code: 404, message: 'user_not_found', data: null });
     if (req.user.id === id) return res.json({ code: 400, message: 'cannot_target_self', data: null });
+    if (superadminTargetBlocked(req, res, target)) return undefined;
     // 管理员不可直接被封禁：必须先降级（否则会出现"被封管理员自救不能"的死结，
     // 也正因为 /admin/* 不叠加 requireActive，被封管理员才仍能自救——故此处从源头禁止）。
     if (target.role === 'admin') return res.json({ code: 400, message: 'cannot_ban_admin', data: null });
@@ -720,7 +770,7 @@ export function createRouter() {
   });
 
   // D5 解封
-  router.post('/admin/users/:id/unban', admin, (req, res) => {
+  router.post('/admin/users/:id/unban', adminWrite, (req, res) => {
     const id = parseInt(req.params.id, 10);
     const target = usersRepo.byId(id);
     if (!target) return res.json({ code: 404, message: 'user_not_found', data: null });
@@ -729,20 +779,30 @@ export function createRouter() {
     return res.json({ code: 0, message: 'ok', data: { id, banned: false } });
   });
 
-  // D6 改角色
-  router.post('/admin/users/:id/role', admin, (req, res) => {
+  // D6 改角色（仅超管；角色值必须在 player/readonly/admin/superadmin 之内）
+  router.post('/admin/users/:id/role', adminRole, (req, res) => {
     const id = parseInt(req.params.id, 10);
     const target = usersRepo.byId(id);
     if (!target) return res.json({ code: 404, message: 'user_not_found', data: null });
-    const role = (req.body || {}).role;
-    if (role !== 'admin' && role !== 'player') return res.json({ code: 400, message: 'bad_role', data: null });
-    if (role === 'player') {
-      // 先保护"最后一个管理员"，再保护"不能操作自己"：
-      // 唯一管理员降级自己 → last_admin_protected（明确告知是"系统唯一管理员"这一更关键的原因）。
-      if (target.role === 'admin' && usersRepo.count().admins <= 1) {
+    const role = String((req.body || {}).role);
+    if (!ROLES.includes(role)) return res.json({ code: 400, message: 'bad_role', data: null });
+    if (req.user.id === id) {
+      // 先护"最后一个可写账号"，再护"最后一个超管"，最后才是"不能操作自己"：
+      // 唯一可写账号降级自己 → 系统再无人能管理，这是比"自己"更关键的原因。
+      const cnt = usersRepo.count();
+      if (isWriterRole(target.role) && cnt.admins <= 1) {
         return res.json({ code: 400, message: 'last_admin_protected', data: null });
       }
-      if (req.user.id === id) return res.json({ code: 400, message: 'cannot_target_self', data: null });
+      if (isSuperadmin(target.role) && cnt.superadmins <= 1) {
+        return res.json({ code: 400, message: 'last_superadmin_protected', data: null });
+      }
+      return res.json({ code: 400, message: 'cannot_target_self', data: null });
+    }
+    // 目标为超管：操作者已是超管（adminRole 保证），只需守住"最后一个超管"
+    if (superadminTargetBlocked(req, res, target)) return undefined;
+    // 剥夺最后一个可写账号的写权限 → 拒绝（readonly/player 都不再能管理后台）
+    if (isWriterRole(target.role) && !isWriterRole(role) && usersRepo.count().admins <= 1) {
+      return res.json({ code: 400, message: 'last_admin_protected', data: null });
     }
     usersRepo.setRole(id, role);
     logAdmin(req, 'set_role', id, target.username, { role });
@@ -750,22 +810,24 @@ export function createRouter() {
   });
 
   // D7 仅踢下线（不封禁）
-  router.post('/admin/users/:id/kick', admin, (req, res) => {
+  router.post('/admin/users/:id/kick', adminWrite, (req, res) => {
     const id = parseInt(req.params.id, 10);
     const target = usersRepo.byId(id);
     if (!target) return res.json({ code: 404, message: 'user_not_found', data: null });
+    if (superadminTargetBlocked(req, res, target)) return undefined;
     const kicked = kickUser(id, 'kicked_by_admin', 4004);
     logAdmin(req, 'kick', id, target.username, { kicked });
     return res.json({ code: 0, message: 'ok', data: { id, kicked } });
   });
 
   // D8 硬删除（需 confirmUsername 完全一致）+ 级联清理
-  router.delete('/admin/users/:id', admin, (req, res) => {
+  router.delete('/admin/users/:id', adminWrite, (req, res) => {
     const id = parseInt(req.params.id, 10);
     const target = usersRepo.byId(id);
     if (!target) return res.json({ code: 404, message: 'user_not_found', data: null });
     if (req.user.id === id) return res.json({ code: 400, message: 'cannot_target_self', data: null });
-    if (target.role === 'admin' && usersRepo.count().admins <= 1) {
+    if (superadminTargetBlocked(req, res, target)) return undefined;
+    if (isWriterRole(target.role) && usersRepo.count().admins <= 1) {
       return res.json({ code: 400, message: 'last_admin_protected', data: null });
     }
     const confirm = (req.body || {}).confirmUsername;
@@ -805,7 +867,7 @@ export function createRouter() {
   });
 
   // D10 强制关房（断开该房世界的人类成员）
-  router.post('/admin/rooms/:code/close', admin, (req, res) => {
+  router.post('/admin/rooms/:code/close', adminWrite, (req, res) => {
     const code = String(req.params.code || '').toUpperCase();
     const room = getRoom(code);
     if (!room) return res.json({ code: 404, message: 'room_not_found', data: null });
@@ -859,14 +921,14 @@ export function createRouter() {
   });
 
   // 修改阈值（天）。0 = 关闭自动清理。
-  router.post('/admin/maintenance/inactive-days', admin, (req, res) => {
+  router.post('/admin/maintenance/inactive-days', adminWrite, (req, res) => {
     const days = setInactiveDays(req.body && req.body.days);
     logAdmin(req, 'set_inactive_days', null, null, { days });
     return res.json({ code: 0, message: 'ok', data: { inactiveDays: days } });
   });
 
   // 立即执行一次清理
-  router.post('/admin/maintenance/purge', admin, (req, res) => {
+  router.post('/admin/maintenance/purge', adminWrite, (req, res) => {
     const r = runInactivePurge(Date.now(), { id: req.user && req.user.id, username: req.user && req.user.username });
     return res.json({
       code: 0, message: 'ok',

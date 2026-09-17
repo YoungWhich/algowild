@@ -2,6 +2,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { normalizeRole } from '../roles.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let dbType = null, dbApi = null;
@@ -179,7 +181,8 @@ export const usersRepo = {
     const where = [];
     const params = [];
     if (filter === 'banned') where.push('banned=1');
-    else if (filter === 'admin') where.push("role='admin'");
+    // filter='admin' = 全部提权角色（只读管理员 / 管理员 / 超管），否则超管会在后台列表里消失
+    else if (filter === 'admin') where.push("role IN ('readonly','admin','superadmin')");
     if (q) {
       if (/^\d+$/.test(q)) { where.push('id=?'); params.push(Number(q)); }
       else { where.push('username LIKE ?'); params.push('%' + q + '%'); }
@@ -193,17 +196,29 @@ export const usersRepo = {
     return { rows, total: totalRow ? Number(totalRow.n) : 0 };
   },
 
-  /** 汇总计数：{ total, banned, admins }。 */
+  /**
+   * 汇总计数：{ total, banned, admins, superadmins }。
+   * admins = 具备写权限的后台账号（admin + superadmin）→ 供"最后一个管理员"保护；
+   * superadmins 单独一项 → 供"最后一个超管"保护。
+   */
   count: () => {
     const r = db().get(
       "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN banned=1 THEN 1 ELSE 0 END),0) AS banned, " +
-      "COALESCE(SUM(CASE WHEN role='admin' THEN 1 ELSE 0 END),0) AS admins FROM users"
+      "COALESCE(SUM(CASE WHEN role IN ('admin','superadmin') THEN 1 ELSE 0 END),0) AS admins, " +
+      "COALESCE(SUM(CASE WHEN role='superadmin' THEN 1 ELSE 0 END),0) AS superadmins FROM users"
     );
-    return r ? { total: Number(r.total) || 0, banned: Number(r.banned) || 0, admins: Number(r.admins) || 0 }
-             : { total: 0, banned: 0, admins: 0 };
+    return r
+      ? {
+        total: Number(r.total) || 0,
+        banned: Number(r.banned) || 0,
+        admins: Number(r.admins) || 0,
+        superadmins: Number(r.superadmins) || 0,
+      }
+      : { total: 0, banned: 0, admins: 0, superadmins: 0 };
   },
 
-  setRole: (id, role) => db().run('UPDATE users SET role=? WHERE id=?', [role === 'admin' ? 'admin' : 'player', id]),
+  /** 设置角色：接受 4 个合法角色（player/readonly/admin/superadmin），非法值回落 player。 */
+  setRole: (id, role) => db().run('UPDATE users SET role=? WHERE id=?', [normalizeRole(role), id]),
 
   /** 设置/清除封禁。until 为 0/NULL 时表示永久。 */
   setBan: (id, o = {}) => {
@@ -229,7 +244,8 @@ export const usersRepo = {
     const keepAdmins = o.keepAdmins !== false;
     const sql =
       'SELECT id, username, role, last_login, created_at FROM users WHERE ' +
-      (keepAdmins ? "role!='admin' AND " : '') +
+      // 保留全部提权账号（只读管理员 / 管理员 / 超管），避免唯一逃生通道被自动清理
+      (keepAdmins ? "role NOT IN ('readonly','admin','superadmin') AND " : '') +
       'COALESCE(last_login, created_at) < ? ORDER BY COALESCE(last_login, created_at) ASC';
     return db().all(sql, [beforeMs]);
   },

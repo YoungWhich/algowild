@@ -24,10 +24,13 @@ const PORT = process.env.PORT || 17000;
  *
  * 关键点：MASTER_USERNAME / MASTER_PASSWORD 写在「平台环境变量」里（属平台配置，
  * 不在临时磁盘上），所以清盘后重启仍能读到 → 自动重建 master 账号。
+ * 角色：master 自举账号固定为 **superadmin**（唯一能改他人角色的层级）；
+ * 空库首账号与 ADMIN_USERNAMES 引导仍给 admin（见 routes.js 注册/登录处）。
+ *
  *   - 未设 MASTER_PASSWORD 时生成强随机密码并打印到启动日志（请妥善保存）；
- *   - 已存在但非 admin 时强制提权，保证逃生通道始终可用。
+ *   - 已存在但非 superadmin 时强制提回，保证逃生通道始终拥有最高权限。
  */
-async function bootstrapMaster() {
+export async function bootstrapMaster() {
   const username = String(process.env.MASTER_USERNAME || '').trim();
   if (!username) return;
   try {
@@ -38,12 +41,12 @@ async function bootstrapMaster() {
       const passhash = await hashPassword(pw);
       usersRepo.create(username, null, passhash);
       const u = usersRepo.byUsername(username);
-      usersRepo.setRole(u.id, 'admin');
-      console.log('[admin] bootstrap: created "' + username + '" as admin' +
+      usersRepo.setRole(u.id, 'superadmin');
+      console.log('[admin] bootstrap: created "' + username + '" as superadmin' +
         (process.env.MASTER_PASSWORD ? '' : '  (随机密码: ' + pw + ' — 请妥善保存)'));
-    } else if (existing.role !== 'admin') {
-      usersRepo.setRole(existing.id, 'admin');
-      console.log('[admin] bootstrap: "' + username + '" 已存在，强制设为 admin');
+    } else if (existing.role !== 'superadmin') {
+      usersRepo.setRole(existing.id, 'superadmin');
+      console.log('[admin] bootstrap: "' + username + '" 已存在，强制设为 superadmin');
     }
   } catch (e) {
     console.warn('[admin] bootstrap master 失败:', e && e.message);
@@ -209,4 +212,7 @@ async function main() {
   console.log('[room-cleanup] empty-room cleanup scheduler armed');
 }
 
-main().catch(e => { console.error('FATAL', e); process.exit(1); });
+// ALGOWILD_NO_AUTOSTART=1：只导入本模块（测试 bootstrapMaster 用），不拉起 HTTP / WS 服务。
+if (process.env.ALGOWILD_NO_AUTOSTART !== '1') {
+  main().catch(e => { console.error('FATAL', e); process.exit(1); });
+}

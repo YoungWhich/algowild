@@ -2,8 +2,8 @@
 //
 // 用法（在项目根目录执行）：
 //   node scripts/admin.mjs list
-//   node scripts/admin.mjs grant <username>          # 设为管理员
-//   node scripts/admin.mjs revoke <username>         # 取消管理员（不能撤销最后一个管理员）
+//   node scripts/admin.mjs grant <username> [player|readonly|admin|superadmin]  # 默认 admin
+//   node scripts/admin.mjs revoke <username>         # 降为玩家（不能撤销最后一个可写管理员）
 //   node scripts/admin.mjs ban <username> [hours]    # 封禁（省略 hours 或 0 = 永久）
 //   node scripts/admin.mjs unban <username>          # 解封
 //   node scripts/admin.mjs delete <username>         # 硬删除 + 级联清理
@@ -14,6 +14,7 @@
 process.env.DB_PATH = process.env.DB_PATH || './server/data/game.db';
 
 const { initDB, usersRepo, adminRepo, dbType_ } = await import('../server/db/index.js');
+const { isWriterRole, roleLabel, normalizeRole } = await import('../server/roles.js');
 
 const args = process.argv.slice(2);
 const cmd = (args[0] || 'list').toLowerCase();
@@ -33,7 +34,7 @@ function fmt(u) {
   const ban = u.banned
     ? ('已封禁' + (u.banned_until ? (' 至 ' + new Date(u.banned_until).toLocaleString()) : '（永久）'))
     : '正常';
-  return `#${u.id}\t${u.username}\t[${role}]\t${ban}\t注册:${new Date(u.created_at).toLocaleString()}`;
+  return `#${u.id}\t${u.username}\t[${role} / ${roleLabel(role)}]\t${ban}\t注册:${new Date(u.created_at).toLocaleString()}`;
 }
 
 try {
@@ -52,9 +53,11 @@ try {
     case 'grant': {
       const u = findUser(username);
       if (!u) { fail(`用户不存在: ${username}`); break; }
-      usersRepo.setRole(u.id, 'admin');
-      adminRepo.log({ action: 'cli_grant', targetId: u.id, targetName: u.username, detail: 'via scripts/admin.mjs' });
-      ok(`已将 ${u.username} 设为管理员`);
+      const role = normalizeRole(String(args[2] || 'admin').trim());
+      if (String(args[2] || 'admin').trim() !== role) { fail(`非法角色值: ${args[2]}（可选 player/readonly/admin/superadmin）`); break; }
+      usersRepo.setRole(u.id, role);
+      adminRepo.log({ action: 'cli_grant', targetId: u.id, targetName: u.username, detail: JSON.stringify({ role, via: 'scripts/admin.mjs' }) });
+      ok(`已将 ${u.username} 设为${roleLabel(role)}（${role}）`);
       break;
     }
 
@@ -62,7 +65,7 @@ try {
       const u = findUser(username);
       if (!u) { fail(`用户不存在: ${username}`); break; }
       const admins = usersRepo.count().admins;
-      if ((u.role || 'player') === 'admin' && admins <= 1) { fail('不能撤销系统中最后一个管理员'); break; }
+      if (isWriterRole(u.role) && admins <= 1) { fail('不能撤销系统中最后一个可写管理员（admin / superadmin）'); break; }
       usersRepo.setRole(u.id, 'player');
       adminRepo.log({ action: 'cli_revoke', targetId: u.id, targetName: u.username, detail: 'via scripts/admin.mjs' });
       ok(`已取消 ${u.username} 的管理员身份`);
@@ -93,7 +96,7 @@ try {
       const u = findUser(username);
       if (!u) { fail(`用户不存在: ${username}`); break; }
       const admins = usersRepo.count().admins;
-      if ((u.role || 'player') === 'admin' && admins <= 1) { fail('不能删除系统中最后一个管理员'); break; }
+      if (isWriterRole(u.role) && admins <= 1) { fail('不能删除系统中最后一个可写管理员（admin / superadmin）'); break; }
       adminRepo.log({ action: 'cli_delete', targetId: u.id, targetName: u.username, detail: 'via scripts/admin.mjs' });
       const r = usersRepo.remove(u.id);
       ok(`已删除 ${u.username}（清理: ${JSON.stringify(r.cleaned)}）`);
@@ -103,7 +106,7 @@ try {
     default:
       console.log('用法:');
       console.log('  node scripts/admin.mjs list');
-      console.log('  node scripts/admin.mjs grant <username>');
+      console.log('  node scripts/admin.mjs grant <username> [role]');
       console.log('  node scripts/admin.mjs revoke <username>');
       console.log('  node scripts/admin.mjs ban <username> [hours]');
       console.log('  node scripts/admin.mjs unban <username>');

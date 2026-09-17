@@ -52,6 +52,8 @@
   .warn-c{color:#ffd479}
   .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;border:1px solid #30363d}
   .tag.admin{color:#ffd479;border-color:#6b5320;background:#2a2410}
+  .tag.super{color:#ff9de2;border-color:#6b2053;background:#2a1024}
+  .tag.readonly{color:#79c0ff;border-color:#1f456b;background:#10222a}
   .tag.player{color:#8b949e}
   .tag.banned{color:#f85149;border-color:#5c2a28;background:#2a1414}
   .tag.normal{color:#3fb950;border-color:#1f4a26;background:#102414}
@@ -118,7 +120,7 @@
           <select id="u-filter">
             <option value="all">全部</option>
             <option value="banned">已封禁</option>
-            <option value="admin">管理员</option>
+            <option value="admin">管理/只读/超管</option>
           </select>
           <select id="u-pageSize">
             <option value="10">10 / 页</option>
@@ -208,6 +210,6 @@
 
 <div id="toast"></div>
 
-<script type="module" src="./admin.js?v=20260912b"></script>
+<script type="module" src="./admin.js?v=20260917a"></script>
 </body>
 </html>
