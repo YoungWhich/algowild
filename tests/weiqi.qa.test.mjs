@@ -1,4 +1,4 @@
-// tests/weiqi.qa.test.mjs — 标准围棋（weiqi）**独立** QA 套件（QA Edward 编写）
+// tests/weiqi.qa.test.mjs — 围棋（weiqi）**独立** QA 套件（QA Edward 编写）
 //
 // 目的：用与工程师 tests/weiqi.test.mjs **不同**的构造与断言，独立复核规则/契约/隔离性/确定性。
 //

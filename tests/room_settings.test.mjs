@@ -16,7 +16,8 @@ import express from 'express';
 import { createRouter } from '../server/routes.js';
 import { signToken } from '../server/auth.js';
 import { initDB, usersRepo } from '../server/db/index.js';
-import { loadKernels } from '../server/engine.js';
+import { World, loadKernels } from '../server/engine.js';
+import { stepAI, makeAIPlayer } from '../server/ai.js';
 import { activeWorlds } from '../server/worldhub.js';
 
 await initDB();
@@ -33,6 +34,10 @@ async function setupApp() {
 // 本文件只关心既有两字段，故抽取后比对（保持原断言语义，不因新增字段而误报）。
 function pickSettings(s) {
   return { stonesPerTurn: s.stonesPerTurn, lonelyDeathDelay: s.lonelyDeathDelay };
+}
+// AI 强度单字段抽取（不动 pickSettings，避免改动既有 RS-01..RS-08 的断言语义）。
+function pickAi(s) {
+  return { aiDifficulty: s.aiDifficulty };
 }
 
 let seq = 0;
@@ -277,4 +282,198 @@ test('RS-08 settings 在四条路径一致（房间视图 / 大厅 / /worlds/:id
   // ④ WS 快照（WS snap 的 payload 就是 activeWorlds.snapshot()）
   assert.deepEqual(pickSettings(activeWorlds.get(worldId).snapshot().settings), { stonesPerTurn: 6, lonelyDeathDelay: 3 },
     '④ WS 快照 settings=6/3');
+});
+
+// ------------------------------------------------------------------ RS-09 AI 强度透传+回读
+test('RS-09 建房透传 aiDifficulty 并在房间详情回读', async () => {
+  const app = await setupApp();
+  const host = newUser('host');
+  const r = await call(app, 'POST', '/api/rooms', {
+    name: 'AI房', maxPlayers: 4, mode: 'go', aiDifficulty: 5,
+  }, host.token);
+  assert.equal(r.body.code, 0, '建房应成功');
+  assert.equal(r.body.data.aiDifficulty, 5, '响应应回显 aiDifficulty=5');
+  assert.equal(r.body.data.room.aiDifficulty, 5, 'roomInfo 应含 aiDifficulty=5');
+
+  const code = r.body.data.code;
+  const info = await call(app, 'GET', `/api/rooms/${code}`, null, host.token);
+  assert.equal(info.body.code, 0);
+  assert.equal(info.body.data.aiDifficulty, 5, '详情回读 aiDifficulty=5');
+});
+
+// ------------------------------------------------------------------ RS-10 AI 强度默认值
+test('RS-10 不传 aiDifficulty → 默认 3', async () => {
+  const app = await setupApp();
+  const host = newUser('host');
+  const r = await call(app, 'POST', '/api/rooms', { name: '默认AI房', maxPlayers: 4 }, host.token);
+  assert.equal(r.body.code, 0);
+  assert.equal(r.body.data.aiDifficulty, 3, '默认 AI 强度应为 3');
+  assert.equal(r.body.data.room.aiDifficulty, 3, 'roomInfo 默认 aiDifficulty=3');
+
+  const w = await call(app, 'POST', '/api/worlds', { name: 'w默认AI', seed: 1, mode: 'go' }, host.token);
+  assert.equal(w.body.code, 0);
+  assert.equal(w.body.data.aiDifficulty, 3, 'POST /worlds 默认 aiDifficulty=3');
+});
+
+// ------------------------------------------------------------------ RS-11 AI 强度钳制
+test('RS-11 aiDifficulty 越界/非法值被钳制且不返回 5xx', async () => {
+  const app = await setupApp();
+  const host = newUser('host');
+  // 0 → 1；99 → 5
+  const r1 = await call(app, 'POST', '/api/rooms', { name: 'AI越界', maxPlayers: 4, aiDifficulty: 0 }, host.token);
+  assert.equal(r1.status, 200, '越界不应 5xx');
+  assert.equal(r1.body.data.aiDifficulty, 1, '0 应被钳到下限 1');
+  const r2 = await call(app, 'POST', '/api/rooms', { name: 'AI越界2', maxPlayers: 4, aiDifficulty: 99 }, host.token);
+  assert.equal(r2.status, 200);
+  assert.equal(r2.body.data.aiDifficulty, 5, '99 应被钳到上限 5');
+  // 'abc' / null / -5 → 3 / 3 / 1
+  const r3 = await call(app, 'POST', '/api/rooms', { name: 'AI非法', maxPlayers: 4, aiDifficulty: 'abc' }, host.token);
+  assert.equal(r3.status, 200, '非数字不应 5xx');
+  assert.equal(r3.body.data.aiDifficulty, 3, '非数字 → 默认 3');
+  const r4 = await call(app, 'POST', '/api/rooms', { name: 'AI空', maxPlayers: 4, aiDifficulty: null }, host.token);
+  assert.equal(r4.body.data.aiDifficulty, 3, 'null → 默认 3');
+  const r5 = await call(app, 'POST', '/api/rooms', { name: 'AI负', maxPlayers: 4, aiDifficulty: -5 }, host.token);
+  assert.equal(r5.body.data.aiDifficulty, 1, '-5 → 钳到 1');
+  // 字符串数字应被接受（'4' → 4）
+  const r6 = await call(app, 'POST', '/api/rooms', { name: 'AI字符串', maxPlayers: 4, aiDifficulty: '4' }, host.token);
+  assert.equal(r6.body.data.aiDifficulty, 4, "字符串 '4' 应解析为 4");
+  // POST /worlds 同样钳制
+  const r7 = await call(app, 'POST', '/api/worlds', { name: 'wAI越界', seed: 2, mode: 'go', aiDifficulty: 100 }, host.token);
+  assert.equal(r7.status, 200);
+  assert.equal(r7.body.data.aiDifficulty, 5, 'POST /worlds 钳到 5');
+});
+
+// ------------------------------------------------------------------ RS-12 快照一致
+test('RS-12 snapshot().settings.aiDifficulty 与请求/房间一致', async () => {
+  const app = await setupApp();
+  const host = newUser('host');
+  // 独立建世界
+  const w = await call(app, 'POST', '/api/worlds', {
+    name: 'wAI设置', seed: 42, mode: 'go', aiDifficulty: 2,
+  }, host.token);
+  assert.equal(w.body.code, 0);
+  const inst = activeWorlds.get(w.body.data.worldId);
+  assert.ok(inst, '世界应挂到 activeWorlds');
+  assert.deepEqual(pickAi(inst.snapshot().settings), { aiDifficulty: 2 }, 'POST /worlds 快照 aiDifficulty=2');
+  assert.equal(inst.aiDifficulty, 2, 'World.aiDifficulty 应为 2');
+
+  // 房间 → 世界
+  const r = await call(app, 'POST', '/api/rooms', {
+    name: '房AI设置', maxPlayers: 4, mode: 'go', aiDifficulty: 4,
+  }, host.token);
+  const code = r.body.data.code;
+  const w2 = await call(app, 'POST', `/api/rooms/${code}/world`, { mode: 'go', seed: 7 }, host.token);
+  assert.equal(w2.body.code, 0, '建世界应成功');
+  const inst2 = activeWorlds.get(w2.body.data.worldId);
+  assert.deepEqual(pickAi(inst2.snapshot().settings), { aiDifficulty: 4 }, '房间建世界后快照 aiDifficulty=4');
+  const info = await call(app, 'GET', `/api/rooms/${code}`, null, host.token);
+  assert.equal(info.body.data.aiDifficulty, 4, '房间详情（世界为权威）aiDifficulty=4');
+});
+
+// ------------------------------------------------------------------ RS-13 重建不丢
+test('RS-13 世界重建后 aiDifficulty 不丢', async () => {
+  const app = await setupApp();
+  const host = newUser('host');
+  const r = await call(app, 'POST', '/api/rooms', {
+    name: 'AI重建房', maxPlayers: 4, mode: 'go', aiDifficulty: 5,
+  }, host.token);
+  const code = r.body.data.code;
+  const w = await call(app, 'POST', `/api/rooms/${code}/world`, { mode: 'go', seed: 11 }, host.token);
+  const worldId = w.body.data.worldId;
+  assert.equal(activeWorlds.get(worldId).aiDifficulty, 5, '建世界时 aiDifficulty=5');
+
+  // 模拟重启：从内存移除世界 → 中途加入触发按房间设置重建
+  activeWorlds.delete(worldId);
+  const guest = newUser('guest');
+  const j = await call(app, 'POST', `/api/rooms/${code}/join`, {}, guest.token);
+  assert.equal(j.body.code, 0, '重启后应能加入并重建世界');
+  const reborn = activeWorlds.get(worldId);
+  assert.ok(reborn, '重建后的世界应在 activeWorlds');
+  assert.equal(reborn.aiDifficulty, 5, '重建后 aiDifficulty 不丢');
+  assert.deepEqual(pickAi(reborn.snapshot().settings), { aiDifficulty: 5 }, '重建后快照 aiDifficulty=5');
+
+  // 备用重建路径 GET /worlds/:id 也不丢
+  activeWorlds.delete(worldId);
+  const snap = await call(app, 'GET', `/api/worlds/${worldId}`, null, host.token);
+  assert.equal(snap.body.code, 0);
+  assert.deepEqual(pickAi(snap.body.data.settings), { aiDifficulty: 5 }, 'GET /worlds/:id 重建 aiDifficulty=5');
+});
+
+// ------------------------------------------------------------------ RS-14 AI 行为
+// 建一个 go 世界（固定种子）并让 AI 出一批手。
+function goWorld(seed, aiDifficulty) {
+  const w = new World('ai_go_' + seed + '_' + (aiDifficulty == null ? 'd' : aiDifficulty), 1, seed,
+    { mode: 'go', aiDifficulty });
+  w._skipAIFill = true;
+  w.addPlayer(1, 'B');
+  w.addPlayer(2, 'W');
+  w._goInit();
+  return w;
+}
+
+test('RS-14 diff=3 的 goAIMove 与改动前逐位一致（固定种子黄金值）', () => {
+  // 黄金值：本次改动前，seed=7 空盘开局 AI 的首批三手（diff=3 必须仍输出这个）。
+  const golden = [{ lx: 16, ly: 16 }, { lx: 17, ly: 16 }, { lx: 16, ly: 17 }];
+  const w3 = goWorld(7, 3);
+  const mv3 = World.goAIMove(w3, w3.go.blackF);
+  assert.ok(mv3 && !mv3.pass, 'diff=3 应出合法手');
+  assert.deepEqual(mv3.moves, golden, 'diff=3 的首批落点必须与改动前一致');
+
+  // 显式 3 与不传（默认）结果相同 → 默认路径未改变行为
+  const wD = goWorld(7, undefined);
+  const mvD = World.goAIMove(wD, wD.go.blackF);
+  assert.deepEqual(mvD.moves, golden, '不传 aiDifficulty（默认 3）应与显式 3 完全一致');
+
+  // 多回合自对弈：diff=3 的完整序列与默认一致（含 _rng 序列不被多吃）
+  const seqOf = (w) => {
+    const out = [];
+    for (let i = 0; i < 6; i++) {
+      const f = w.go.turn;
+      const mv = World.goAIMove(w, f);
+      out.push(mv.pass ? 'pass' : mv.moves.map(m => `${m.lx},${m.ly}`).join(';'));
+      if (mv.pass) break;
+      w._goPlayBatch(f, mv.moves, []);
+      w.go.turn = (f === w.go.blackF) ? w.go.whiteF : w.go.blackF;
+      w.go.placedThisTurn = 0;
+    }
+    out.push(w._rng(), w._rng(), w._rng());
+    return out;
+  };
+  assert.deepEqual(seqOf(goWorld(11, 3)), seqOf(goWorld(11, undefined)),
+    'diff=3 的多回合落子序列（含后续 rng 取值）应与默认完全一致');
+});
+
+test('RS-15 diff=1 / diff=5 的 AI 均能出合法手（不崩溃、数量 1..K）', () => {
+  for (const diff of [1, 2, 3, 4, 5]) {
+    for (const seed of [7, 42]) {
+      const w = goWorld(seed, diff);
+      const f = w.go.blackF;
+      const mv = World.goAIMove(w, f);
+      assert.ok(mv, `diff=${diff} seed=${seed} 应有返回`);
+      if (mv.pass) continue;
+      assert.ok(mv.moves.length >= 1 && mv.moves.length <= w.stonesPerTurn,
+        `diff=${diff} seed=${seed} 手数应在 1..${w.stonesPerTurn}，实际 ${mv.moves.length}`);
+      const seen = new Set();
+      for (const p of mv.moves) {
+        assert.ok(Number.isInteger(p.lx) && Number.isInteger(p.ly), '落点应为整数');
+        assert.ok(p.lx >= 0 && p.lx < w.lifeW && p.ly >= 0 && p.ly < w.lifeW, '落点应在盘内');
+        const key = p.lx + ',' + p.ly;
+        assert.ok(!seen.has(key), '同批落点不应重复');
+        seen.add(key);
+      }
+      const r = w._goPlayBatch(f, mv.moves, []);
+      assert.equal(r.ok, true, `diff=${diff} seed=${seed} 整批应可合法落下`);
+    }
+  }
+  // rts 侧：stepAI 在各难度下都不抛错
+  for (const diff of [1, 3, 5]) {
+    const w = new World('ai_rts_' + diff, 1, 5, { mode: 'rts', aiDifficulty: diff });
+    w._skipAIFill = true;
+    const human = w.addPlayer(1, 'Human');
+    const ai = makeAIPlayer(w, w._rng);
+    ai.x = human.x + 8; ai.y = human.y;
+    assert.doesNotThrow(() => {
+      for (let i = 0; i < 20; i++) { stepAI(w, w.intentQueue); w.intentQueue.drain(ai.id); }
+    }, `stepAI 在 diff=${diff} 下不应抛错`);
+  }
 });

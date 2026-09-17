@@ -1,4 +1,4 @@
-// server/modes/weiqi.js — 标准围棋（weiqi）模式插件。
+// server/modes/weiqi.js — 围棋（weiqi）模式插件。
 //
 // 纯围棋规则（与 go 模式**不同**：**无康威/元胞演化**）：
 //   · 19×19 棋盘；双方轮流落子，**每手 1 子**。
@@ -13,8 +13,9 @@
 //   · 模拟路径禁用 Math.random / Date.now（IR-3a）：AI 平票打破走种子化 this._rng。
 //   · 方法族以 `_weiqi*` 前缀命名空间挂载（install 钩子，mixin 只挂自己的方法）。
 import { registerMode } from './index.js';
+import { aiDifficultyOf, aiTune } from '../ai.js';
 
-const WEIQI_SIZE = 19;      // 标准 19×19（默认棋盘边长，board=null 时）
+const WEIQI_SIZE = 19;      // 19×19（默认棋盘边长，board=null 时）
 const WEIQI_KOMI = 7.5;     // 贴目（19×19 用 7.5）
 // 容器内"墙"哨兵：形状外/虚空/越界（来自编辑器形状）→ 不可落子 + 不计气 + 阻断连通。
 // 取值 99，**落在阵营号 1..8 之外**（`_factionOf` 只返回 1..8，故墙绝不可能与任何玩家阵营撞值）；
@@ -137,7 +138,12 @@ function bestWeiqiMove(engine) {
   const size = g.size, B = g.board, f = g.turn;
   const opp = f === 1 ? 2 : 1;
   const mid = (size - 1) / 2;
+  // 强度：噪声幅度 / 失误概率（diff=3 → 0.05 / 0，与现状一致）
+  const diff = aiDifficultyOf(engine);
+  const noiseAmp = aiTune(diff, [0.3, 0.15, 0.05, 0.025, 0.01]);
+  const blunderRate = aiTune(diff, [0.5, 0.25, 0, 0, 0]);
   let best = null, bestS = -Infinity;
+  let second = null, secondS = -Infinity;    // 次优手（低难度失误时改用）
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const k = idx(size, x, y);
@@ -165,10 +171,13 @@ function bestWeiqiMove(engine) {
       }
       let s = captured * 80 + Math.min(own.libs, 6) * 3 + near * 2
         + (size - (Math.abs(x - mid) + Math.abs(y - mid))) * 0.1
-        + engine._rng() * 0.05;
-      if (s > bestS) { bestS = s; best = { x, y }; }
+        + engine._rng() * noiseAmp;
+      if (s > bestS) { secondS = bestS; second = best; bestS = s; best = { x, y }; }
+      else if (s > secondS) { secondS = s; second = { x, y }; }
     }
   }
+  // 失误判定（仅低难度）：blunderRate>0 短路，diff>=3 不多消耗 rng。
+  if (blunderRate > 0 && second && engine._rng() < blunderRate) return second;
   return best;
 }
 
@@ -205,7 +214,7 @@ const proto = {
       moveLog: [],                          // [{n,f,x,y,captured}]
     };
     // 若配置了棋盘形状：把墙（形状外/虚空/越界）在容器上标为 WEIQI_WALL。
-    // board=null（this._bmp=null）→ 不标任何墙 → 标准 19×19 行为逐字节不变。
+    // board=null（this._bmp=null）→ 不标任何墙 → 19×19 行为逐字节不变。
     if (this._bmp) {
       for (let y = 0; y < size; y++) {
         for (let x = 0; x < size; x++) {
@@ -483,7 +492,7 @@ const proto = {
 
 const def = {
   id: 'weiqi',
-  label: '标准围棋',
+  label: '围棋',
   tickDriver: 'interval',
   intervalMs: 1000,
   boardMax: 128,            // 可设 1..128（默认仍 19，见 boardDefault）

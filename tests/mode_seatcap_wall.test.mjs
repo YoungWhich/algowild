@@ -130,7 +130,7 @@ test('SC-WALL-02 形状盘：墙格标 99 且拒落(wall)；可落格成功；�
 });
 
 test('SC-WALL-03 撞车消除：棋子值 ∈ {1,2}，墙(99) 不等于任何席位 faction', () => {
-  const w = world('gomoku');       // 标准 15×15（board=null，无墙）
+  const w = world('gomoku');       // 15×15（board=null，无墙）
   w.addPlayer(1, 'B'); w.addPlayer(2, 'W');
   const g = w._gomokuInit();
   w.applyGomokuIntent(1, { lx: 7, ly: 7 }, []);

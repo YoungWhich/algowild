@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS rooms (
   -- 房间玩法设置（房主设定；旧库由 migrate() 补列）
   stones_per_turn INTEGER,      -- 回合制每回合最多落几颗（1..16）
   lonely_death_delay INTEGER,   -- 孤子等无法存活单位宽限几回合才死（0..10）
+  ai_difficulty INTEGER,        -- 电脑对手强度（1..5；NULL = 回退默认 3）
   -- 胜利条件（房主设定；JSON 串；旧库由 migrate() 补列；NULL = 回退默认）
   victory_lines TEXT,           -- JSON: {"territory":true,"economy":false,...}
   victory_thresholds TEXT,      -- JSON: {"territoryRegions":16,...}

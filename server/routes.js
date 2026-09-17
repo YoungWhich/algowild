@@ -11,7 +11,7 @@ import { activeWorlds, worldModes } from './worldhub.js';
 import { kickUser, onlineUserIds } from './net.js';
 import {
   createRoom, getRoom, attachWorld, closeRoom, roomInfo, listPublicRooms,
-  verifyRoomPass, roomHub, MAX_PLAYERS, normStonesPerTurn, normLonelyDeathDelay,
+  verifyRoomPass, roomHub, MAX_PLAYERS, normStonesPerTurn, normLonelyDeathDelay, normAiDifficulty,
   normVictoryLines, normVictoryThresholds, normBoard, normGoLimits, setRoomSettings,
 } from './rooms.js';
 import { normalizeMode } from './modes/index.js';
@@ -119,6 +119,7 @@ export function createRouter() {
       // 玩法设置透传（重建路径也不能丢；roomOpts 已由 roomForRoom 归一化）
       stonesPerTurn: roomOpts && roomOpts.stonesPerTurn,
       lonelyDeathDelay: roomOpts && roomOpts.lonelyDeathDelay,
+      aiDifficulty: roomOpts && roomOpts.aiDifficulty,
       // 胜利条件透传（重建路径同样不能丢）
       victoryLines: roomOpts && roomOpts.victoryLines,
       victoryThresholds: roomOpts && roomOpts.victoryThresholds,
@@ -143,6 +144,7 @@ export function createRouter() {
       mode: room.mode, maxPlayers: room.maxPlayers, ownerId: room.ownerId, members: room.members,
       // 重启重建也要带上房间设置，否则设置会丢失
       stonesPerTurn: room.stonesPerTurn, lonelyDeathDelay: room.lonelyDeathDelay,
+      aiDifficulty: room.aiDifficulty,
       victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds,
       board: room.board,
       goLimits: room.goLimits,
@@ -244,6 +246,7 @@ export function createRouter() {
     worldsRepo.create(id, req.user.id, name, sd);
     const stonesPerTurn = normStonesPerTurn(b.stonesPerTurn);
     const lonelyDeathDelay = normLonelyDeathDelay(b.lonelyDeathDelay);
+    const aiDifficulty = normAiDifficulty(b.aiDifficulty);
     // 胜利条件：按模式归一（go 强制只留 territory）
     const victoryLines = normVictoryLines(b.victoryLines, md);
     const victoryThresholds = normVictoryThresholds(b.victoryThresholds);
@@ -255,6 +258,7 @@ export function createRouter() {
       hostId: req.user.id,
       stonesPerTurn,
       lonelyDeathDelay,
+      aiDifficulty,
       victoryLines,
       victoryThresholds,
       board,
@@ -265,7 +269,7 @@ export function createRouter() {
     });
     activeWorlds.set(id, w);
     worldModes.set(id, md);
-    return res.json({ code: 0, message: 'ok', data: { worldId: id, seed: sd, mode: md, maxPlayers: w.maxPlayers, stonesPerTurn, lonelyDeathDelay, victoryLines, victoryThresholds, board, goLimits } });
+    return res.json({ code: 0, message: 'ok', data: { worldId: id, seed: sd, mode: md, maxPlayers: w.maxPlayers, stonesPerTurn, lonelyDeathDelay, aiDifficulty, victoryLines, victoryThresholds, board, goLimits } });
   });
 
   router.get('/worlds/:id', authed, (req, res) => {
@@ -284,6 +288,7 @@ export function createRouter() {
           members: room.members,
           stonesPerTurn: room.stonesPerTurn,
           lonelyDeathDelay: room.lonelyDeathDelay,
+          aiDifficulty: room.aiDifficulty,
           victoryLines: room.victoryLines,
           victoryThresholds: room.victoryThresholds,
           board: room.board,
@@ -346,7 +351,7 @@ export function createRouter() {
       const room = await createRoom({
         ownerId: req.user.id, name: b.name, maxPlayers: b.maxPlayers || w.maxPlayers,
         visibility: b.visibility, password: b.password, mode: w.mode,
-        stonesPerTurn: b.stonesPerTurn, lonelyDeathDelay: b.lonelyDeathDelay,
+        stonesPerTurn: b.stonesPerTurn, lonelyDeathDelay: b.lonelyDeathDelay, aiDifficulty: b.aiDifficulty,
         victoryLines: b.victoryLines, victoryThresholds: b.victoryThresholds,
         board: b.board,
         goLimits: b.goLimits,
@@ -359,6 +364,7 @@ export function createRouter() {
         code: room.code, worldId: w.worldId, mode: w.mode,
         maxPlayers: room.maxPlayers,
         stonesPerTurn: room.stonesPerTurn, lonelyDeathDelay: room.lonelyDeathDelay,
+        aiDifficulty: room.aiDifficulty,
         victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds,
         board: room.board,
         goLimits: room.goLimits,
@@ -370,7 +376,7 @@ export function createRouter() {
     const room = await createRoom({
       ownerId: req.user.id, name: b.name, maxPlayers: b.maxPlayers,
       visibility: b.visibility, password: b.password, mode: b.mode,
-      stonesPerTurn: b.stonesPerTurn, lonelyDeathDelay: b.lonelyDeathDelay,
+      stonesPerTurn: b.stonesPerTurn, lonelyDeathDelay: b.lonelyDeathDelay, aiDifficulty: b.aiDifficulty,
       victoryLines: b.victoryLines, victoryThresholds: b.victoryThresholds,
       board: b.board,
       goLimits: b.goLimits,
@@ -379,6 +385,7 @@ export function createRouter() {
     return res.json({ code: 0, message: 'ok', data: {
       code: room.code, maxPlayers: room.maxPlayers, mode: room.mode,
       stonesPerTurn: room.stonesPerTurn, lonelyDeathDelay: room.lonelyDeathDelay,
+      aiDifficulty: room.aiDifficulty,
       victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds,
       board: room.board,
       goLimits: room.goLimits,
@@ -427,6 +434,7 @@ export function createRouter() {
       mode: md, maxPlayers: room.maxPlayers, hostId: req.user.id,
       // 房间玩法设置透传到世界
       stonesPerTurn: room.stonesPerTurn, lonelyDeathDelay: room.lonelyDeathDelay,
+      aiDifficulty: room.aiDifficulty,
       // 胜利条件透传到世界（房间记录为权威；go 下由引擎再强制 gate）
       victoryLines: room.victoryLines, victoryThresholds: room.victoryThresholds,
       // 棋盘形状透传到世界（房间记录为权威）

@@ -124,6 +124,7 @@ function migrate() {
     // 房间玩法设置（旧库补列；新库已在 schema.sql 内含，重复执行报错被忽略）
     'ALTER TABLE rooms ADD COLUMN stones_per_turn INTEGER',
     'ALTER TABLE rooms ADD COLUMN lonely_death_delay INTEGER',
+    'ALTER TABLE rooms ADD COLUMN ai_difficulty INTEGER',
     // 胜利条件（房主可配置；JSON 串；旧库补列）
     'ALTER TABLE rooms ADD COLUMN victory_lines TEXT',
     'ALTER TABLE rooms ADD COLUMN victory_thresholds TEXT',
@@ -328,7 +329,7 @@ export const worldsRepo = {
 export const roomsRepo = {
   // 建房：world_id 用 '' 占位表示"尚未建立世界"（先建房后建世界）。
   create: (code, worldId, ownerId, maxPlayers, opts) => db().run(
-    'INSERT INTO rooms(code,world_id,owner_id,max_players,visibility,passhash,name,mode,stones_per_turn,lonely_death_delay,victory_lines,victory_thresholds,board,go_limits,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    'INSERT INTO rooms(code,world_id,owner_id,max_players,visibility,passhash,name,mode,stones_per_turn,lonely_death_delay,ai_difficulty,victory_lines,victory_thresholds,board,go_limits,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     [
       code, worldId || '', ownerId, maxPlayers,
       (opts && opts.visibility) || 'public',
@@ -338,6 +339,7 @@ export const roomsRepo = {
       // 设置列：调用方已做范围钳制；缺失存 NULL（读取时回退默认）
       (opts && Number.isInteger(opts.stonesPerTurn)) ? opts.stonesPerTurn : null,
       (opts && Number.isInteger(opts.lonelyDeathDelay)) ? opts.lonelyDeathDelay : null,
+      (opts && Number.isInteger(opts.aiDifficulty)) ? opts.aiDifficulty : null,
       // 胜利条件：对象 → JSON 串；缺失存 NULL（hydrate 时回默认）
       (opts && opts.victoryLines) ? JSON.stringify(opts.victoryLines) : null,
       (opts && opts.victoryThresholds) ? JSON.stringify(opts.victoryThresholds) : null,

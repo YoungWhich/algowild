@@ -1,4 +1,4 @@
-// tests/weiqi.test.mjs — 标准围棋（weiqi）模式插件
+// tests/weiqi.test.mjs — 围棋（weiqi）模式插件
 // 覆盖：气/提子 / 禁自杀 / 劫 / 双 pass 终局 / 中国规则数子 + 贴目 / **无演化** / 快照 / routeIntent。
 // 风格参考 tests/go_mode.test.mjs：node:test + node:assert/strict。
 import test from 'node:test';
@@ -180,7 +180,7 @@ test('WQ-13 贴目常量 + IR-3a：server/modes/weiqi.js 不含 Math.random / Da
 
 test('WQ-14 注册表：weiqi 已注册（id/驱动/上限/胜利线/归一/清单）', () => {
   assert.equal(getMode('weiqi').id, 'weiqi');
-  assert.equal(getMode('weiqi').label, '标准围棋');
+  assert.equal(getMode('weiqi').label, '围棋');
   assert.equal(getMode('weiqi').tickDriver, 'interval');
   assert.equal(getMode('weiqi').intervalMs, 1000);
   assert.equal(boardMaxForMode('weiqi'), 128);

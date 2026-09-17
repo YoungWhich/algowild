@@ -264,7 +264,7 @@ test('GK-18 非矩形盘：所有非墙格占满 → 判平局（draw）', () =>
   assert.equal(Array.from(g.board).some((v) => v === 0), false, '盘上应再无空点');
 });
 
-test('GK-19 标准 15×15 回归：仅剩 1 空点不判平局，占满即平局（board=null 逐字节等价旧行为）', () => {
+test('GK-19 15×15 回归：仅剩 1 空点不判平局，占满即平局（board=null 逐字节等价旧行为）', () => {
   const { w } = seated();
   assert.equal(Array.from(w.gomoku.board).some((v) => v === WALL), false, 'board=null → 不得有墙');
   // 周期性图案：任意方向最长连续 2（无五连），留 (0,0) 作最后一手。

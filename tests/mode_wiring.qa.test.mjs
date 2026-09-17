@@ -59,7 +59,7 @@ test('QWA-02 前端注册表（真 ESM import）归一 / 上限 / 默认 / 标�
   assert.equal(boardDefaultForMode('rts'), 32);
   assert.equal(boardDefaultForMode('bogus'), 32);       // 未知 → 32
   assert.equal(getMode('gomoku').label, '五子棋');
-  assert.equal(getMode('weiqi').label, '标准围棋');
+  assert.equal(getMode('weiqi').label, '围棋');
   assert.equal(isIntervalMode('gomoku'), true);
   assert.equal(isIntervalMode('weiqi'), true);
   assert.equal(isIntervalMode('rts'), false);

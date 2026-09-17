@@ -14,6 +14,20 @@ import { WORLD_W, WORLD_H, pickSpawn } from './util.js';
 const AI_NAMES = ['BoidsAI', 'VoronoiAI', 'L_SystemAI', 'Rule30AI', 'ReactionDiffAI', 'AntColonyAI', 'MSTPrimAI', 'DelaunayAI'];
 let aiCounter = 0;
 
+// ---- AI 强度（房主设置 world.aiDifficulty 1..5，默认 3）----
+// diff=3 时各系数取原字面量（噪声 0.5 / 权重 40·5 / 每 tick 决策 / 交战半径 12 / 可冲刺），
+// 行为与引入难度前逐位一致；diff<=2 更弱，diff>=4 更强。
+export function aiDifficultyOf(world) {
+  const v = world ? world.aiDifficulty : undefined;
+  const n = (typeof v === 'number' && Number.isFinite(v)) ? Math.floor(v) : 3;
+  return Math.max(1, Math.min(5, n));
+}
+/** 按难度取表值：table[0..4] 对应 diff 1..5；难度非法 → 取 diff=3 那一项。 */
+export function aiTune(diff, table) {
+  const i = (Number.isInteger(diff) && diff >= 1 && diff <= 5) ? diff - 1 : 2;
+  return table[i];
+}
+
 // ---- 生命棋盘结构镜像（不 import engine，避免循环依赖）----
 const _isStrong = (v) => v > 0 && v <= 8;
 const _factionOfCell = (v) => (v > 10 ? v - 10 : v);
@@ -193,6 +207,11 @@ function moveToward(world, p, intents, wx, wy) {
 
 export function stepAI(world, intents) {
   const ps = Object.values(world.players);
+  // 强度：决策频率 / 交战半径 / 冲刺。diff=3 → 每 tick 决策、12 格、可冲刺（= 现状）。
+  const diff = aiDifficultyOf(world);
+  const thinkEvery = aiTune(diff, [3, 2, 1, 1, 1]);
+  const engageR = aiTune(diff, [5, 8, 12, 13, 14]);
+  const canDash = diff >= 3;
   // "AI 驱动"包含两类：原生 AI，以及**掉线后由电脑接手**的人类角色（botControlled）。
   // 这样"中途离开由电脑接手"无需复制一份 AI 逻辑，玩家回来时清掉标记即接回原位。
   const isBot = (q) => q.isAI === true || q.botControlled === true;
@@ -205,7 +224,7 @@ export function stepAI(world, intents) {
     // D) 决策频率：每 tick 都决策（原 `_aiThink < 2` → ~10Hz）。rts 实体数不多，20Hz 全量决策
     //    性能可接受；更跟手（修复"回种期冻结/迟钝"）。确定性不受影响（全程无 Math.random，
     //    模拟层只用 world._rng）。
-    if (p._aiThink < 1) continue;
+    if (p._aiThink < thinkEvery) continue;
     p._aiThink = 0;
     if (p._plantCd > 0) p._plantCd--;
 
@@ -245,7 +264,7 @@ export function stepAI(world, intents) {
     //      "追一场空、地也丢了"。AI 不是弱，是**决策错误**：把时间浪费在打不死的追猎上。
     //    新逻辑：只有"进攻期望收益为正"才追猎，否则继续 land-drive（AI 的主胜利线=占地）。
     //    ─────────────────────────────────────────────────────────────────────
-    const ENGAGE_R2 = 12 * 12;                 // A1) 交战半径 20→12（更靠近才考虑打）
+    const ENGAGE_R2 = engageR * engageR;       // A1) 交战半径（diff=3 → 12*12，与现状一致）
     let enemy = null, ed = ENGAGE_R2;
     for (const h of humans) {
       if (!h.alive) continue;
@@ -287,7 +306,7 @@ export function stepAI(world, intents) {
         moveToward(world, p, intents, enemy.x, enemy.y);
         if (ed < 6 * 6) intents.push(p.id, { attack: { tx: enemy.x, ty: enemy.y } });
         // B) 冲刺窗口：ed>4*4 && ed<12*12 时冲刺贴身（原 16*16 收窄到交战半径内）
-        if (ed > 4 * 4 && ed < 12 * 12 && p.dashCharge >= 1 && p.dashCooldown === 0) {
+        if (canDash && ed > 4 * 4 && ed < 12 * 12 && p.dashCharge >= 1 && p.dashCooldown === 0) {
           intents.push(p.id, { dash: { dx, dy } });
         }
         continue;
@@ -526,6 +545,12 @@ export function goAIMove(world, f) {
   const playable = (x, y) => !(world._isWall && world._isWall(x, y));
   // 本回合可落子数（房主可设，默认 3）；夹紧到 1..16，防越界或未初始化。
   const K = Math.max(1, Math.min(16, world.stonesPerTurn || 3));
+  // 强度：噪声幅度 / 提子权重 / 气权重 / 失误概率（diff=3 → 0.5 / 40 / 5 / 0，与现状一致）。
+  const diff = aiDifficultyOf(world);
+  const noiseAmp = aiTune(diff, [2.5, 1.5, 0.5, 0.25, 0.1]);
+  const capW = aiTune(diff, [24, 32, 40, 48, 56]);
+  const libW = aiTune(diff, [3, 4, 5, 6, 7]);
+  const blunderRate = aiTune(diff, [0.5, 0.25, 0, 0, 0]);
   // 1) 候选点：邻接任意非空格（1~2 环）；空盘 → 天元附近
   const cand = new Set();
   let any = false;
@@ -599,11 +624,11 @@ export function goAIMove(world, f) {
     }
     const center = -(Math.abs(x - cx0) + Math.abs(y - cy0));
     // 权重：提子 > 连接 > 气数 > 靠近敌子 > 占中心（+ 少量噪声走 _rng 打破平局）
-    const noise = world._rng() * 0.5;
+    const noise = world._rng() * noiseAmp;
     const score =
-      cap * 40 +
+      cap * capW +
       ally * 6 +
-      Math.min(libs, 4) * 5 +
+      Math.min(libs, 4) * libW +
       enemy * 3 +
       center * 0.15 +
       noise;
@@ -612,10 +637,16 @@ export function goAIMove(world, f) {
   if (!scored.length) return { pass: true };
   // 取前 K 名（确定性平局打破：分数相同按 key 升序）
   scored.sort((a, b) => (b.s - a.s) || ((a.lx * W + a.ly) - (b.lx * W + b.ly)));
+  // 失误（仅低难度）：用一次 _rng 判定，命中则改取排名靠后的次优手。
+  // blunderRate>0 的短路保证 diff>=3 不多消耗 rng，序列与现状完全一致。
+  let start = 0;
+  if (blunderRate > 0 && world._rng() < blunderRate) {
+    start = Math.min(Math.max(1, scored.length >> 1), Math.max(0, scored.length - 1));
+  }
   const moves = [];
-  for (const s of scored) {
+  for (let i = start; i < scored.length; i++) {
     if (moves.length >= K) break;
-    moves.push({ lx: s.lx, ly: s.ly });
+    moves.push({ lx: scored[i].lx, ly: scored[i].ly });
   }
   if (!moves.length) return { pass: true };
   return { moves };

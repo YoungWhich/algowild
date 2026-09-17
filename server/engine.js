@@ -66,6 +66,9 @@ export class World {
     // lonelyDeathDelay：无法存活的孤子"还能撑几个回合才死"（默认 0 = 立即死，恢复标准康威）。
     this.lonelyDeathDelay = World._clampInt(
       opts && opts.lonelyDeathDelay, World.LONELY_DEATH_DELAY_DEFAULT, 0, World.LONELY_DEATH_DELAY_MAX);
+    // aiDifficulty：电脑对手强度（1..5，默认 3 = 改动前行为）。
+    this.aiDifficulty = World._clampInt(
+      opts && opts.aiDifficulty, World.AI_DIFFICULTY_DEFAULT, World.AI_DIFFICULTY_MIN, World.AI_DIFFICULTY_MAX);
     // ---- 房主可配置的胜利条件（constructor 侧双保险：rooms.js 已归一，这里再取一次）----
     // victoryLines：4 个布尔开关（默认仅 territory）；go 模式强制只保留 territory。
     this.victoryLines = World.normVictoryLines(opts && opts.victoryLines, this.mode);
@@ -770,6 +773,10 @@ export class World {
   // 死亡宽限：孤子这种无法永久存活的单位，可设置"撑几个回合才死"（默认 0 = 立即死）。
   static LONELY_DEATH_DELAY_DEFAULT = 0;
   static LONELY_DEATH_DELAY_MAX = 10;
+  // 电脑对手强度（房主可设）：1..5，默认 3 = 改动前行为（噪声 0.5 / 交战半径 12 / 每 tick 决策）。
+  static AI_DIFFICULTY_DEFAULT = 3;
+  static AI_DIFFICULTY_MIN = 1;
+  static AI_DIFFICULTY_MAX = 5;
   // ---- 胜利线开关族（房主可配置；唯一事实源，三端共用）----
   // 键集；默认仅【领土】（避免"开局一方被秒 → 另一方立刻胜"的意外）。
   static VICTORY_LINE_KEYS = ['territory', 'economy', 'singularity', 'survival'];
@@ -1848,6 +1855,7 @@ export class World {
       settings: {
         stonesPerTurn: this.stonesPerTurn,
         lonelyDeathDelay: this.lonelyDeathDelay,
+        aiDifficulty: this.aiDifficulty,
         // 胜利条件（房主可配置）：开关 + rts 门槛 + 该模式可用开关集。
         victoryLines: this.victoryLines,
         victoryThresholds: this.victoryThresholds,

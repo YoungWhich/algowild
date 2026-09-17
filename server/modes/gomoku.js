@@ -12,8 +12,9 @@
 //   · 方法族以 `_gomoku*` 前缀命名空间挂载（install 钩子，mixin 只挂自己的方法）。
 //   · routeIntent 只消费 {gomoku:{...}} 意图；其余意图返回 silent（既不入 rts 队列也不广播）。
 import { registerMode } from './index.js';
+import { aiDifficultyOf, aiTune } from '../ai.js';
 
-const GOMOKU_SIZE = 15;   // 标准 15×15（默认棋盘边长，board=null 时）
+const GOMOKU_SIZE = 15;   // 15×15（默认棋盘边长，board=null 时）
 const GOMOKU_WIN = 5;     // 5 连即胜（含 5 连以上）
 // 容器内"墙"哨兵：形状外/虚空/越界（来自编辑器形状）→ 不可落子 + 阻断连线。
 // 取值 99，**落在阵营号 1..8 之外**（`_factionOf` 只返回 1..8，故墙绝不可能与任何玩家阵营撞值）；
@@ -104,16 +105,24 @@ function bestGomokuMove(engine) {
     if (board[idx(size, c, c)] === 0) return { x: c, y: c };
   }
   const mid = (size - 1) / 2;
+  // 强度：噪声幅度 / 失误概率（diff=3 → 0.01 / 0，与现状一致）
+  const diff = aiDifficultyOf(engine);
+  const noiseAmp = aiTune(diff, [0.06, 0.03, 0.01, 0.005, 0.002]);
+  const blunderRate = aiTune(diff, [0.5, 0.25, 0, 0, 0]);
   let best = null, bestS = -Infinity;
+  let second = null, secondS = -Infinity;    // 次优手（低难度失误时改用）
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       if (board[idx(size, x, y)] !== 0) continue;
       let s = moveScore(board, size, x, y, f, opp);
       s += (size - (Math.abs(x - mid) + Math.abs(y - mid))) * 0.0001;  // 轻微向中心偏好
-      s += engine._rng() * 0.01;                                        // 种子化平票打破
-      if (s > bestS) { bestS = s; best = { x, y }; }
+      s += engine._rng() * noiseAmp;                                    // 种子化平票打破
+      if (s > bestS) { secondS = bestS; second = best; bestS = s; best = { x, y }; }
+      else if (s > secondS) { secondS = s; second = { x, y }; }
     }
   }
+  // 失误判定（仅低难度）：blunderRate>0 短路，diff>=3 不多消耗 rng。
+  if (blunderRate > 0 && second && engine._rng() < blunderRate) return second;
   return best;
 }
 
@@ -148,7 +157,7 @@ const proto = {
       moveLog: [],                         // [{n,f,x,y}] 复盘
     };
     // 若配置了棋盘形状：把墙（形状外/虚空/越界）在容器上标为 GOMOKU_WALL。
-    // board=null（this._bmp=null）→ 不标任何墙 → 标准 15×15 行为逐字节不变。
+    // board=null（this._bmp=null）→ 不标任何墙 → 15×15 行为逐字节不变。
     if (this._bmp) {
       for (let y = 0; y < size; y++) {
         for (let x = 0; x < size; x++) {

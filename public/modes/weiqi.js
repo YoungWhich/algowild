@@ -1,4 +1,4 @@
-// public/modes/weiqi.js — 标准围棋（weiqi）前端视图（渲染 / 输入 / HUD 入口）。
+// public/modes/weiqi.js — 围棋（weiqi）前端视图（渲染 / 输入 / HUD 入口）。
 //
 // 由 public/modes/index.js 登记 kind，在 client.js 顶部 import 并由 VIEWS 分派。
 // 依赖注入工厂：client.js 传入 env，本模块自包含，**不反向依赖 client.js**。
@@ -116,7 +116,7 @@ export function createWeiqiView(env) {
     ctx.strokeStyle = 'rgba(40,26,12,0.95)';
     ctx.lineWidth = Math.max(2 / scale, 0.05);
     ctx.strokeRect(0.5, 0.5, N - 1, N - 1);
-    // 星位（19×19 标准 9 个）
+    // 星位（19×19 共 9 个）
     ctx.fillStyle = 'rgba(30,18,8,0.85)';
     for (const [sx, sy] of [[3, 3], [9, 3], [15, 3], [3, 9], [9, 9], [15, 9], [3, 15], [9, 15], [15, 15]]) {
       if (sx < N && sy < N) { ctx.beginPath(); ctx.arc(sx + 0.5, sy + 0.5, 0.09, 0, Math.PI * 2); ctx.fill(); }
@@ -208,7 +208,7 @@ export function createWeiqiView(env) {
 
     goh.style.display = 'flex';
     goh.innerHTML =
-      `<span class="go-title">标准围棋 · ${N}×${N}</span>` +
+      `<span class="go-title">围棋 · ${N}×${N}</span>` +
       `<span>第 <b>${g.moveNo || 0}</b> 手</span>` +
       `<span class="go-turn">${phaseTxt}</span>` +
       `<span>中国规则数子 · 贴目 <b>${g.komi != null ? g.komi : 7.5}</b></span>` +

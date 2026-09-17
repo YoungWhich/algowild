@@ -31,6 +31,10 @@ function lonelyDeathDelayDefault() {
   const v = WorldEngine && WorldEngine.LONELY_DEATH_DELAY_DEFAULT;
   return Number.isInteger(v) ? v : 0;
 }
+function aiDifficultyDefault() {
+  const v = WorldEngine && WorldEngine.AI_DIFFICULTY_DEFAULT;
+  return Number.isInteger(v) ? v : 3;
+}
 
 /** 每回合落子数：整数，钳制到 1..16；未提供/非法 → 默认。 */
 export function normStonesPerTurn(v) {
@@ -46,6 +50,14 @@ export function normLonelyDeathDelay(v) {
   const n = Math.floor(Number(v));
   if (!Number.isFinite(n)) return lonelyDeathDelayDefault();
   return Math.max(0, Math.min(10, n));
+}
+
+/** 电脑对手强度：整数，钳制到 1..5；未提供/非法 → 默认 3。 */
+export function normAiDifficulty(v) {
+  if (v === undefined || v === null || v === '') return aiDifficultyDefault();
+  const n = Math.floor(Number(v));
+  if (!Number.isFinite(n)) return aiDifficultyDefault();
+  return Math.max(1, Math.min(5, n));
 }
 
 export function normMaxPlayers(v) {
@@ -170,6 +182,7 @@ export async function createRoom(o) {
   const passhash = (visibility === 'private' && o.password) ? await hashPassword(String(o.password)) : null;
   const stonesPerTurn = normStonesPerTurn(o.stonesPerTurn);
   const lonelyDeathDelay = normLonelyDeathDelay(o.lonelyDeathDelay);
+  const aiDifficulty = normAiDifficulty(o.aiDifficulty);
   const roomMode = normalizeMode(o.mode, null);   // 已注册模式 → 该 id；未指定/非法 → null（沿用原语义）
   // 胜利条件（房主设定；归一后写入 → DB 镜像 → 重建时透传）
   const victoryLines = normVictoryLines(o.victoryLines, roomMode);
@@ -189,6 +202,7 @@ export async function createRoom(o) {
     // 玩法设置（房主设定；重建世界时透传，保证重启不丢）
     stonesPerTurn,
     lonelyDeathDelay,
+    aiDifficulty,
     victoryLines,
     victoryThresholds,
     board,
@@ -203,7 +217,7 @@ export async function createRoom(o) {
   try {
     roomsRepo.create(code, '', o.ownerId, room.maxPlayers, {
       visibility, passhash, name: room.name, mode: room.mode,
-      stonesPerTurn, lonelyDeathDelay, victoryLines, victoryThresholds, board, goLimits,
+      stonesPerTurn, lonelyDeathDelay, aiDifficulty, victoryLines, victoryThresholds, board, goLimits,
     });
   } catch (e) { /* DB 镜像失败不影响内存房间 */ }
   return room;
@@ -222,6 +236,7 @@ function hydrate(row) {
     // 旧库缺列/为 NULL → 回退默认
     stonesPerTurn: normStonesPerTurn(row.stones_per_turn),
     lonelyDeathDelay: normLonelyDeathDelay(row.lonely_death_delay),
+    aiDifficulty: normAiDifficulty(row.ai_difficulty),
     victoryLines: normVictoryLines(row.victory_lines, row.mode || null),
     victoryThresholds: normVictoryThresholds(row.victory_thresholds),
     // 旧库缺列/为 NULL → null（回默认矩形）
@@ -290,6 +305,8 @@ export function roomInfo(room, viewerId) {
     : (Number.isInteger(room.stonesPerTurn) ? room.stonesPerTurn : stonesPerTurnDefault());
   const lonelyDeathDelay = Number.isInteger(ws.lonelyDeathDelay) ? ws.lonelyDeathDelay
     : (Number.isInteger(room.lonelyDeathDelay) ? room.lonelyDeathDelay : lonelyDeathDelayDefault());
+  const aiDifficulty = Number.isInteger(ws.aiDifficulty) ? ws.aiDifficulty
+    : (Number.isInteger(room.aiDifficulty) ? room.aiDifficulty : aiDifficultyDefault());
   // 胜利条件：世界为权威（建好后），否则房间记录，都没有则回退默认。
   const modeNow = w ? w.mode : (room.mode || null);
   const victoryLines = (ws.victoryLines) ? ws.victoryLines
@@ -315,6 +332,7 @@ export function roomInfo(room, viewerId) {
     // 玩法设置（供大厅与房内展示）
     stonesPerTurn,
     lonelyDeathDelay,
+    aiDifficulty,
     // 胜利条件（房主可配置）+ 本模式可用开关集
     victoryLines,
     victoryThresholds,

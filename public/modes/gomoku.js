@@ -105,7 +105,7 @@ export function createGomokuView(env) {
     ctx.strokeStyle = 'rgba(40,26,12,0.9)';
     ctx.lineWidth = Math.max(2 / scale, 0.04);
     ctx.strokeRect(0.5, 0.5, N - 1, N - 1);
-    // 星位（15×15 标准 5 个）
+    // 星位（15×15 共 5 个）
     ctx.fillStyle = 'rgba(30,18,8,0.85)';
     const star = [[3, 3], [11, 3], [7, 7], [3, 11], [11, 11]];
     for (const [sx, sy] of star) {

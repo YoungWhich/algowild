@@ -102,7 +102,7 @@ test('MW-03 前端注册表 MODES 的 boardMax/boardDefault 与预期一致', as
   assert.equal(normalizeMode('gomoku'), 'gomoku');
   assert.equal(normalizeMode('不存在'), 'rts');
   assert.equal(getMode('gomoku').label, '五子棋');
-  assert.equal(getMode('weiqi').label, '标准围棋');
+  assert.equal(getMode('weiqi').label, '围棋');
 });
 
 test('MW-04 分形模板文件存在，且后端模板 inert（不自注册）', async () => {

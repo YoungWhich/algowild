@@ -180,6 +180,7 @@ function roomOpts() {
     // 玩法设置（服务端会再钳制）：每回合落子数 1..16（默认 3）、死亡宽限回合 0..10（默认 0）
     stonesPerTurn: clampInt($('room-stones') && $('room-stones').value, 1, 16, 3),
     lonelyDeathDelay: clampInt($('room-delay') && $('room-delay').value, 0, 10, 0),
+    aiDifficulty: clampInt($('room-ai-difficulty') && $('room-ai-difficulty').value, 1, 5, 3),
     // 胜利条件（房主勾选；服务端按模式再 gate）
     victoryLines: collectVictoryLines('victory-lines-build-list', mode),
     // 棋盘形状（可编辑棋盘）：null = 默认矩形；否则为序列化三态位图字符串
@@ -203,6 +204,10 @@ function collectGoLimits() {
 function goLimitsText(gl) {
   const n = normGoLimitsClient(gl);
   return `${n.maxMoves} 手 · 每手 ${Math.round(n.turnMs / 1000)} 秒 · 超时 ${n.maxTimeouts} 次判负`;
+}
+// AI 强度中文摘要（1..5 → 很弱/弱/普通/强/很强）。
+function aiDifficultyText(v) {
+  return ['很弱', '弱', '普通', '强', '很强'][clampInt(v, 1, 5, 3) - 1];
 }
 // 客户端侧归一（与服务端 World.normGoLimits 同规则；仅供展示，权威在服务端）。
 function normGoLimitsClient(v) {
@@ -863,6 +868,7 @@ if ($('quick-room')) $('quick-room').onclick = async () => {
       name: '快速开局', maxPlayers: 4, visibility: 'public', mode,
       stonesPerTurn: clampInt($('room-stones') && $('room-stones').value, 1, 16, 3),
       lonelyDeathDelay: clampInt($('room-delay') && $('room-delay').value, 0, 10, 0),
+      aiDifficulty: clampInt($('room-ai-difficulty') && $('room-ai-difficulty').value, 1, 5, 3),
       victoryLines: collectVictoryLines('victory-lines-build-list', mode),
       board: collectBoard(boardBuildEditor),
       goLimits: collectGoLimits(),
@@ -1110,7 +1116,9 @@ function renderLobby(info) {
   if ($('room-settings-info')) {
     const spt = Number.isInteger(info.stonesPerTurn) ? info.stonesPerTurn : 3;
     const ldd = Number.isInteger(info.lonelyDeathDelay) ? info.lonelyDeathDelay : 0;
-    $('room-settings-info').textContent = `落子 ${spt} 颗/回合 · 死亡宽限 ${ldd} 回合`;
+    const aid = Number.isInteger(info.aiDifficulty) ? info.aiDifficulty : 3;
+    $('room-settings-info').textContent =
+      `落子 ${spt} 颗/回合 · 死亡宽限 ${ldd} 回合 · AI 强度 ${aiDifficultyText(aid)}`;
   }
   // 胜利条件展示（只读；房主可点[编辑]改）
   const vMode = _modeNormalize(info.mode);

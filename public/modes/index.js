@@ -35,7 +35,7 @@ export const MODES = {
   },
   weiqi: {
     id: 'weiqi',
-    label: '标准围棋',
+    label: '围棋',
     kind: 'weiqi',
     tickDriver: 'interval',
     boardMax: 128,
